@@ -1,0 +1,26 @@
+# Персональные данные клиентов и сканы — НИКОГДА не коммитим
+X:*/
+mock_scans/passport/
+mock_scans/pages/
+mock_scans/document/
+demo_archive/[!_]*/
+
+# Локальная конфигурация (абсолютные пути рабочего места)
+arm_config.json
+
+# Excel-реестры с данными клиентов
+*.xlsx
+
+# Базы и бэкапы
+*.db
+server_backup/
+*.zip
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+*.orig
+
+# OS
+.DS_Store

@@ -1,0 +1,29 @@
+# --- АРМ Оператора по приёму иностранных граждан ---
+# Базовые (все ОС):
+PyQt6>=6.6           # графический интерфейс АРМ
+Pillow>=10.0         # обработка изображений, развороты, PDF (300 dpi)
+python-docx>=1.1     # работа с .docx-шаблонами
+openpyxl>=3.1        # Excel-реестры (обучение / прочие)
+
+# --- Только Windows (целевая ОС) ---
+# Печать на сетевые принтеры и конвертация .docx -> .pdf через MS Word:
+pywin32>=306 ; platform_system == "Windows"
+comtypes>=1.2 ; platform_system == "Windows"
+
+# --- Распознавание паспорта из файла-скана (OCR без оборудования) ---
+# Авто-распознавание MRZ из выбранного с диска jpg/png. Требуется системный
+# бинарь tesseract (macOS: brew install tesseract; Windows: пакет UB Mannheim).
+passporteye>=2.2        # детекция MRZ-зоны + чтение (использует opencv)
+pytesseract>=0.3        # запасной прямой OCR
+opencv-python-headless  # зависимость passporteye (обработка изображения)
+
+# --- Сканеры (по мере подключения оборудования) ---
+# Kodak SceyeX через TWAIN:
+# pyinsane2 ; platform_system == "Windows"
+# Regula 7017: Document Reader SDK (локальный Web API сервис) — Python-пакет
+#   regula.documentreader.webclient; URL сервиса в ARM_REGULA_URL.
+#   См. armcore/scanners.py (RegulaScanner) и armcore/config.py.
+# regula.documentreader.webclient>=6.0
+
+# Сервер (server/server.py) и бэкап (server/backup.py) используют только
+# стандартную библиотеку Python — отдельных зависимостей не требуют.
