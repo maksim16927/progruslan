@@ -18,6 +18,8 @@
 """
 from __future__ import annotations
 
+import os
+import shutil
 from typing import List, Optional, Tuple
 
 # Повороты в порядке вероятности: 0° (норма), 90°/270° (скан «боком»), 180°.
@@ -26,6 +28,58 @@ _ROTATIONS = (0, 90, 270, 180)
 _MIN_SIDE = 1500
 _TESS_CFG = ("--psm 6 -c tessedit_char_whitelist="
              "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<")
+
+# Стандартные пути установки Tesseract OCR на Windows (UB Mannheim installer).
+_WIN_TESSERACT_PATHS = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+def _find_tesseract() -> Optional[str]:
+    """Найти исполняемый файл tesseract: env ARM_TESSERACT -> PATH -> станд. пути."""
+    env = os.environ.get("ARM_TESSERACT")
+    if env and os.path.exists(env):
+        return env
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    for p in _WIN_TESSERACT_PATHS:
+        if os.path.exists(p):
+            return p
+    # На Windows tesseract может быть в %LOCALAPPDATA%\Programs\Tesseract-OCR
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        cand = os.path.join(local, "Programs", "Tesseract-OCR", "tesseract.exe")
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _configure_tesseract() -> Optional[str]:
+    """Прописать путь к tesseract в pytesseract (важно для Windows). Вернёт путь."""
+    exe = _find_tesseract()
+    if not exe:
+        return None
+    try:
+        import pytesseract  # type: ignore
+        pytesseract.pytesseract.tesseract_cmd = exe
+    except ImportError:
+        pass
+    return exe
+
+
+def ocr_diagnostics() -> dict:
+    """Состояние OCR-окружения: что установлено, что нет (для подсказок оператору)."""
+    info = {"tesseract": _find_tesseract(), "passporteye": False,
+            "pytesseract": False, "pillow": False}
+    for mod in ("passporteye", "pytesseract", "PIL"):
+        try:
+            __import__(mod)
+            info["pillow" if mod == "PIL" else mod] = True
+        except ImportError:
+            pass
+    return info
 
 
 def mrz_text_from_image(image_path: str) -> Optional[str]:
@@ -40,6 +94,9 @@ def mrz_text_from_image(image_path: str) -> Optional[str]:
     """
     # Ленивый импорт, чтобы избежать циклической зависимости mrz <-> mrz_ocr.
     from . import mrz as mrz_parser
+
+    # На Windows tesseract обычно не в PATH — прописываем путь явно.
+    _configure_tesseract()
 
     best_text: Optional[str] = None
     best_score = 0

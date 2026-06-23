@@ -62,6 +62,22 @@ pip install -r requirements.txt
 На рабочих местах (Windows) дополнительно ставятся `pywin32` и `comtypes`
 (см. requirements.txt), а также драйверы/SDK сканеров.
 
+### Распознавание паспорта из файла-скана (OCR) на Windows
+
+Авто-распознавание MRZ требует **Tesseract OCR** — на Windows его нужно
+поставить отдельно (на Linux/macOS — через пакетный менеджер):
+
+1. Скачать установщик: https://github.com/UB-Mannheim/tesseract/wiki
+   (`tesseract-ocr-w64-setup-*.exe`) и установить.
+2. Установить Python-пакеты: `pip install passporteye pytesseract opencv-python-headless`.
+3. Программа сама ищет `tesseract.exe` в стандартных путях
+   (`C:\Program Files\Tesseract-OCR\`). Если установили в другое место —
+   задайте путь переменной окружения `ARM_TESSERACT`, например:
+   `set ARM_TESSERACT=D:\Tools\Tesseract-OCR\tesseract.exe`.
+
+Если при выборе скана появляется «MRZ распознать не удалось», программа
+подскажет, какого компонента не хватает (tesseract / passporteye / pytesseract).
+
 ## Запуск
 
 **Сервер** (один на сеть, на файловом сервере):

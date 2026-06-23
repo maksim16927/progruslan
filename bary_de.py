@@ -525,11 +525,27 @@ class MainWindow(QWidget):
                 QMessageBox.information(self, "Распознано", msg)
                 break
         if not recognized:
-            QMessageBox.information(
-                self, "Скан выбран",
-                f"Выбрано файлов: {len(files)}.\nMRZ из изображения распознать не "
-                "удалось (плохое качество или нет зоны MRZ).\n\nВпишите данные "
-                "вручную или вставьте текст MRZ и нажмите «Распознать MRZ».")
+            diag = mrz_ocr.ocr_diagnostics()
+            problems = []
+            if not diag["tesseract"]:
+                problems.append("• не установлен Tesseract OCR "
+                                "(скачайте установщик UB Mannheim, либо укажите путь "
+                                "в переменной ARM_TESSERACT)")
+            if not diag["passporteye"]:
+                problems.append("• не установлен пакет passporteye "
+                                "(pip install passporteye)")
+            if not diag["pytesseract"]:
+                problems.append("• не установлен пакет pytesseract "
+                                "(pip install pytesseract)")
+            base = (f"Выбрано файлов: {len(files)}.\nMRZ из изображения распознать "
+                    "не удалось.\n\n")
+            if problems:
+                base += ("Похоже, не настроено распознавание:\n"
+                         + "\n".join(problems) + "\n\n")
+            else:
+                base += "Возможно, плохое качество скана или нет зоны MRZ.\n\n"
+            base += "Впишите данные вручную или вставьте текст MRZ и нажмите «Распознать MRZ»."
+            QMessageBox.information(self, "Скан выбран", base)
         self._update_status()
 
     def on_pick_pages(self):
