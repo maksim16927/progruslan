@@ -92,9 +92,9 @@ def main(argv) -> int:
         lines.append(f"FIELDS_DIAG: {fields if fields else '(пусто)'}")
     except Exception as e:  # noqa: BLE001
         lines.append(f"FIELDS_DIAG: ошибка: {e}")
-    lines.append(f"MRZ: {cap.mrz_text!r if cap else '(нет захвата)'}")
-    lines.append(f"VIZ: {cap.viz_fields if cap else '(нет захвата)'}")
-    lines.append(f"IMAGES: {cap.image_paths if cap else '(нет захвата)'}")
+    lines.append("MRZ: " + (repr(cap.mrz_text) if cap else "(нет захвата)"))
+    lines.append("VIZ: " + (str(cap.viz_fields) if cap else "(нет захвата)"))
+    lines.append("IMAGES: " + (str(cap.image_paths) if cap else "(нет захвата)"))
     lines.append(f"OUT_DIR: {out_dir}")
     try:
         xml = scanner.lexical_xml()
