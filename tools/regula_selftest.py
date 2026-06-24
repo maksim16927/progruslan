@@ -87,6 +87,17 @@ def main(argv) -> int:
     if not cap.image_paths:
         print("  (нет — портрет не получен)")
 
+    _hr("3b. ВСЕ текстовые поля, которые отдал SDK (диагностика)")
+    try:
+        all_fields = scanner.dump_text_fields()
+        if all_fields:
+            for k, v in all_fields.items():
+                print(f"  {k}: {v}")
+        else:
+            print("  (SDK не вернул ни одного текстового поля)")
+    except Exception as e:  # noqa: BLE001
+        print("  ошибка дампа:", e)
+
     if cap.mrz_text:
         res = mrz_parser.parse(cap.mrz_text)
         _hr("4. Разбор MRZ парсером программы")

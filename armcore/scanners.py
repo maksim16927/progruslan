@@ -110,6 +110,19 @@ class RegulaScanner(BaseScanner):
     _GF_PORTRAIT = 0xC9
     _RESULT_TYPE_TEXT = 0x24
 
+    # Расширенный набор полей для диагностики (что реально отдаёт SDK).
+    _FT_DUMP = {
+        "Document_Number": 0x02, "Date_of_Expiry": 0x03, "Date_of_Issue": 0x04,
+        "Date_of_Birth": 0x05, "Place_of_Birth": 0x06, "Sex": 0x07,
+        "Surname": 0x08, "Given_Names": 0x09, "Nationality": 0x0B,
+        "Authority": 0x18, "Surname_And_Given_Names": 0x19,
+        "Nationality_Code": 0x1A, "Address": 0x1B,
+        "MRZ_String1": 0x20, "MRZ_String2": 0x21, "MRZ_Strings": 0x33,
+        "Place_of_Issue": 0x27, "Personal_Number": 0x0D,
+        "Middle_Name": 0x92, "Surname_RUS": 0x7E, "Given_Names_RUS": 0x7F,
+        "Place_of_Registration": 0x45, "Authority_Code": 0x49,
+    }
+
     def __init__(self, dll_path: Optional[str] = None,
                  license_path: Optional[str] = None):
         self.dll_path = dll_path
@@ -253,6 +266,20 @@ class RegulaScanner(BaseScanner):
             return str(val).strip() if val is not None else ""
         except Exception:  # noqa: BLE001
             return ""
+
+    def dump_text_fields(self, reader=None) -> dict:
+        """Все непустые текстовые поля, которые отдаёт SDK (для диагностики)."""
+        reader = reader or self._load_sdk()
+        out = {}
+        for name, code in self._FT_DUMP.items():
+            try:
+                val = reader.GetTextFieldByType(code)
+                val = str(val).strip() if val is not None else ""
+            except Exception:  # noqa: BLE001
+                val = ""
+            if val:
+                out[name] = val
+        return out
 
     def _mrz(self, reader) -> str:
         """MRZ-строки: сначала GetMRZLines(), иначе поле ft_MRZ_Strings."""
