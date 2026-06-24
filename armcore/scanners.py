@@ -152,8 +152,17 @@ class RegulaScanner(BaseScanner):
         except ScannerError:
             return False
 
+    # Типы результатов (eRPRM_ResultType) — для диагностики готовности.
+    _RESULT_TYPES = {
+        "RawImage": 0x01,
+        "Graphics": 0x06,
+        "Text": 0x24,
+        "OCRLexicalAnalyze": 0x25,
+        "DocumentTypesCandidates": 0x08,
+    }
+
     # -------------------------------------------------------------- захват
-    def capture_passport(self, out_dir: str, timeout_s: int = 30) -> PassportCapture:
+    def capture_passport(self, out_dir: str, timeout_s: int = 60) -> PassportCapture:
         """Захват с устройства: ждём, пока оператор положит паспорт и SDK обработает."""
         reader = self._load_sdk()
         try:
@@ -163,6 +172,20 @@ class RegulaScanner(BaseScanner):
             raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
         self._wait_for_result(reader, timeout_s)
         return self._collect(reader, out_dir)
+
+    def diagnostics(self, reader=None) -> dict:
+        """Какие типы результатов сейчас доступны у ридера (для отладки)."""
+        reader = reader or self._load_sdk()
+        info = {}
+        for name, code in self._RESULT_TYPES.items():
+            try:
+                info[name] = int(reader.IsReaderResultTypeAvailable(code))
+            except Exception as e:  # noqa: BLE001
+                info[name] = f"err: {e}"
+        # Пробное чтение ключевых полей.
+        info["mrz_preview"] = self._mrz(reader)[:60]
+        info["surname_preview"] = self._text(reader, "SURNAME")
+        return info
 
     def process_image(self, image_path: str, out_dir: str) -> PassportCapture:
         """Распознать готовый файл-скан через SDK (без устройства)."""
@@ -175,8 +198,21 @@ class RegulaScanner(BaseScanner):
             raise ScannerError(f"Regula: ошибка DoProcessImage: {e}") from e
         return self._collect(reader, out_dir)
 
+    def _result_ready(self, reader) -> bool:
+        """Готов ли результат: по доступности Text/Graphics или по непустым полям."""
+        for code in (self._RESULT_TYPE_TEXT, 0x06):  # Text, Graphics
+            try:
+                if int(reader.IsReaderResultTypeAvailable(code)) > 0:
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+        # Прямое чтение — иногда поля доступны раньше «флага готовности».
+        if self._mrz(reader) or self._text(reader, "SURNAME"):
+            return True
+        return False
+
     def _wait_for_result(self, reader, timeout_s: int):
-        """Ждать появления текстового результата (документ обработан)."""
+        """Ждать появления результата (документ положен и обработан)."""
         import time
         try:
             import pythoncom  # type: ignore
@@ -185,16 +221,16 @@ class RegulaScanner(BaseScanner):
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if pythoncom is not None:
-                pythoncom.PumpWaitingMessages()  # обработать COM-события
-            try:
-                if reader.IsReaderResultTypeAvailable(self._RESULT_TYPE_TEXT) > 0:
-                    return
-            except Exception:  # noqa: BLE001
-                pass
-            time.sleep(0.2)
+                pythoncom.PumpWaitingMessages()  # прокачать COM-события
+            if self._result_ready(reader):
+                return
+            time.sleep(0.3)
+        # Диагностика — что реально доступно у ридера на момент таймаута.
+        diag = self.diagnostics(reader)
         raise ScannerError(
-            "Regula: не дождались результата распознавания (положите паспорт на "
-            "сканер). Если устройство недоступно — проверьте подключение."
+            "Regula: не дождались результата распознавания за "
+            f"{timeout_s} c. Диагностика результата: {diag}. "
+            "Подсветка моргает — значит захват есть; пришлите эту строку разработчику."
         )
 
     # ------------------------------------------------------------- разбор

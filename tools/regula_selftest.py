@@ -65,8 +65,8 @@ def main(argv) -> int:
         if image:
             cap = scanner.process_image(image, out_dir)
         else:
-            print("Положите паспорт на сканер, ожидание до 30 сек...")
-            cap = scanner.capture_passport(out_dir, timeout_s=30)
+            print("Положите паспорт на сканер, ожидание до 60 сек...")
+            cap = scanner.capture_passport(out_dir, timeout_s=60)
     except scanners.ScannerError as e:
         print("ОШИБКА захвата/распознавания:")
         print(" ", e)
