@@ -376,13 +376,44 @@ class RegulaScanner(BaseScanner):
             out.append(f"GetReaderGraphicsBitmapByFieldType err: {e}")
         return "; ".join(out)
 
+    def _raw_image_bytes(self, reader) -> bytes:
+        """Сырой снимок документа (белый свет) — если портрет недоступен."""
+        # Пробуем выбрать результат сырого изображения и взять кадр.
+        for args in ((0x01, 0, 0, ""), (0x01, 0, 0)):  # RawImage
+            try:
+                reader.CheckReaderResult(*args)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        for getter, args in (
+            ("GetReaderEOSBitmapImageByLightIndex", (0,)),
+            ("GetReaderImageByLightIndex", (0,)),
+            ("GetReaderImage", (0, 0)),
+        ):
+            try:
+                fn = getattr(reader, getter, None)
+                if fn is None:
+                    continue
+                raw = self._to_bytes(fn(*args))
+                if raw:
+                    return raw
+            except Exception:  # noqa: BLE001
+                continue
+        return b""
+
     def _save_images(self, reader, out_dir: str) -> List[str]:
-        """Сохранить портрет владельца из результата SDK."""
+        """Сохранить портрет владельца и/или сырой снимок паспорта из SDK."""
         os.makedirs(out_dir, exist_ok=True)
         saved: List[str] = []
-        raw = self._portrait_bytes(reader)
-        if raw:
+        portrait = self._portrait_bytes(reader)
+        if portrait:
             path = os.path.join(out_dir, "portrait.jpg")
+            with open(path, "wb") as fh:
+                fh.write(portrait)
+            saved.append(path)
+        raw = self._raw_image_bytes(reader)
+        if raw:
+            path = os.path.join(out_dir, "passport_scan.jpg")
             with open(path, "wb") as fh:
                 fh.write(raw)
             saved.append(path)

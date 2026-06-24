@@ -114,18 +114,40 @@ def main(argv) -> int:
         else:
             print("  Не удалось разобрать MRZ.")
 
-    # Диагностика портрета и полей — В САМОМ КОНЦЕ (чтобы попадала в копию снизу).
-    _hr("ГОТОВО — пришлите ВСЁ, что ниже")
+    # Полная диагностика — пишем в файл и открываем его (копировать не нужно).
+    lines = []
+    lines.append("=== REGULA SELFTEST DIAG ===")
     try:
-        print("PORTRAIT_DIAG:", scanner.graphics_info())
+        lines.append(f"RESULT_TYPES: {scanner.diagnostics()}")
     except Exception as e:  # noqa: BLE001
-        print("PORTRAIT_DIAG: ошибка:", e)
+        lines.append(f"RESULT_TYPES: ошибка: {e}")
+    try:
+        lines.append(f"PORTRAIT_DIAG: {scanner.graphics_info()}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"PORTRAIT_DIAG: ошибка: {e}")
     try:
         fields = scanner.dump_text_fields()
-        print("FIELDS_DIAG:", fields if fields else "(пусто)")
+        lines.append(f"FIELDS_DIAG: {fields if fields else '(пусто)'}")
     except Exception as e:  # noqa: BLE001
-        print("FIELDS_DIAG: ошибка:", e)
-    print(f"OUT_DIR: {out_dir}")
+        lines.append(f"FIELDS_DIAG: ошибка: {e}")
+    lines.append(f"MRZ: {cap.mrz_text!r}")
+    lines.append(f"VIZ: {cap.viz_fields}")
+    lines.append(f"IMAGES: {cap.image_paths}")
+    lines.append(f"OUT_DIR: {out_dir}")
+
+    os.makedirs(out_dir, exist_ok=True)
+    diag_path = os.path.join(out_dir, "diag.txt")
+    with open(diag_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+
+    _hr("ГОТОВО")
+    print("\n".join(lines))
+    print(f"\nДиагностика сохранена в файл:\n  {diag_path}")
+    print("Открываю файл — пришлите его разработчику.")
+    try:
+        os.startfile(diag_path)  # type: ignore[attr-defined]  (Windows)
+    except Exception:  # noqa: BLE001
+        pass
     return 0
 
 
