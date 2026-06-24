@@ -128,6 +128,8 @@ class RegulaScanner(BaseScanner):
         self.dll_path = dll_path
         self.license_path = license_path
         self._reader = None
+        self._proc_count = 0       # сколько раз пришло OnProcessingFinished
+        self._events_ok = False    # удалось ли привязать COM-события
 
     # ------------------------------------------------------------------ SDK
     def _load_sdk(self):
@@ -140,14 +142,26 @@ class RegulaScanner(BaseScanner):
                 "Не установлен pywin32 (win32com) — нужен для подключения к "
                 "COM-объекту Regula. Установите: pip install pywin32."
             ) from e
+
+        parent = self
+
+        class _ReaderEvents:
+            def OnProcessingFinished(self, *args):  # noqa: N802 — имя события SDK
+                parent._proc_count += 1
+
         try:
-            reader = win32com.client.Dispatch(self.PROGID)
-        except Exception as e:  # noqa: BLE001
-            raise ScannerError(
-                f"Не удалось создать COM-объект {self.PROGID}: {e}. "
-                "Проверьте, что Regula SDK установлен и зарегистрирован "
-                "(regsvr32), а сканер подключён."
-            ) from e
+            reader = win32com.client.DispatchWithEvents(self.PROGID, _ReaderEvents)
+            self._events_ok = True
+        except Exception:  # noqa: BLE001 — события не привязались, опрос как фолбэк
+            self._events_ok = False
+            try:
+                reader = win32com.client.Dispatch(self.PROGID)
+            except Exception as e:  # noqa: BLE001
+                raise ScannerError(
+                    f"Не удалось создать COM-объект {self.PROGID}: {e}. "
+                    "Проверьте, что Regula SDK установлен и зарегистрирован "
+                    "(regsvr32), а сканер подключён."
+                ) from e
         # Включаем ПОЛНУЮ обработку документа (как в C#-примере поставки SDK):
         #   DoVisualOCR  — чтение визуальной зоны (отчество, место рождения,
         #                  дата выдачи, орган) — без него fieldList пустой;
@@ -206,7 +220,8 @@ class RegulaScanner(BaseScanner):
         except Exception as e:  # noqa: BLE001
             raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
         self._clear_results(reader)  # сбросить прошлый результат — фото будет новым
-        self._wait_for_result(reader, timeout_s)
+        start_count = self._proc_count
+        self._wait_for_result(reader, timeout_s, start_count=start_count)
         return self._collect(reader, out_dir)
 
     def diagnostics(self, reader=None) -> dict:
@@ -250,34 +265,60 @@ class RegulaScanner(BaseScanner):
         except Exception:  # noqa: BLE001
             return False
 
-    def _wait_for_result(self, reader, timeout_s: int, grace_s: float = 12.0):
-        """Ждать, пока готовы И текст, И портрет.
+    def _wait_for_result(self, reader, timeout_s: int, grace_s: float = 12.0,
+                         start_count: int = 0):
+        """Ждать завершения обработки документа.
 
-        Текст (MRZ) и портрет приходят в разные моменты обработки. Поэтому ждём
-        оба; если за grace_s после появления первого второй не пришёл — работаем
-        с тем, что есть (частичный результат лучше зависания).
+        Если COM-события привязаны — ждём ``OnProcessingFinished`` и небольшой
+        «тихий период» (документ сканируется в несколько проходов: ИК→MRZ,
+        белый→снимок/портрет; событие приходит на каждый проход, берём после
+        последнего). Иначе — опрос по наличию текста и портрета.
         """
         import time
         try:
             import pythoncom  # type: ignore
         except ImportError:
             pythoncom = None
+
+        def pump():
+            if pythoncom is not None:
+                pythoncom.PumpWaitingMessages()
+
         deadline = time.monotonic() + timeout_s
+
+        if self._events_ok:
+            last_event_count = start_count
+            last_event_at = None
+            while time.monotonic() < deadline:
+                pump()
+                if self._proc_count > last_event_count:
+                    last_event_count = self._proc_count
+                    last_event_at = time.monotonic()
+                # После последнего прохода ждём тишины ~3 c и забираем результат.
+                if last_event_at is not None and time.monotonic() - last_event_at >= 3.0:
+                    return
+                time.sleep(0.2)
+            if last_event_at is not None or self._has_text(reader) or self._has_portrait(reader):
+                return
+            diag = self.diagnostics(reader)
+            raise ScannerError(
+                f"Regula: документ не обработан за {timeout_s} c. Диагностика: {diag}."
+            )
+
+        # --- фолбэк: опрос (события не привязались) ---
         first_seen_at = None
         while time.monotonic() < deadline:
-            if pythoncom is not None:
-                pythoncom.PumpWaitingMessages()  # прокачать COM-события
+            pump()
             text = self._has_text(reader)
             portrait = self._has_portrait(reader)
             if text and portrait:
-                return  # полный результат
+                return
             if text or portrait:
                 if first_seen_at is None:
                     first_seen_at = time.monotonic()
                 elif time.monotonic() - first_seen_at >= grace_s:
-                    return  # вторая часть не пришла — берём что есть
+                    return
             time.sleep(0.3)
-        # Таймаут: если хоть что-то есть — продолжаем, иначе ошибка.
         if self._has_text(reader) or self._has_portrait(reader):
             return
         diag = self.diagnostics(reader)
