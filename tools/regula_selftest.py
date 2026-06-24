@@ -125,16 +125,16 @@ def main(argv) -> int:
     print("\n".join(lines))
     print(f"\nДиагностика сохранена в файл: {diag_path}")
 
-    # Не открываем Блокнот. Если есть портрет — открываем фото.
-    portrait = os.path.join(out_dir, "portrait.jpg")
-    if os.path.exists(portrait):
-        print(f"Фото сохранено: {portrait}")
+    # Не открываем Блокнот. Если есть скан — открываем картинку.
+    scan = os.path.join(out_dir, "passport_scan.jpg")
+    if os.path.exists(scan):
+        print(f"Скан сохранён: {scan}")
         try:
-            os.startfile(portrait)  # type: ignore[attr-defined]  (Windows)
+            os.startfile(scan)  # type: ignore[attr-defined]  (Windows)
         except Exception:  # noqa: BLE001
             pass
     else:
-        print("Портрет не получен (в этом скане сканер не отдал фото).")
+        print("Скан не получен (в этом считывании сканер не отдал изображение).")
     return 0
 
 

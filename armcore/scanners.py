@@ -423,23 +423,20 @@ class RegulaScanner(BaseScanner):
     }
 
     def _collect(self, reader, out_dir: str) -> PassportCapture:
-        """Собрать MRZ, поля и изображения из текущего результата SDK."""
+        """Собрать MRZ, поля и изображения из текущего результата SDK.
+
+        Основные поля (ФИО, номер, даты, гражданство, личный номер) берёт из MRZ
+        надёжный разбор в GUI — их из SDK НЕ маппим, чтобы не затирать обрезанными
+        значениями. Из SDK берём только то, чего нет в MRZ.
+        """
         self._select_text_result(reader)
         mrz_text = self._mrz(reader)
-        # Поля из XML распознавания (надёжнее GetTextFieldByType на этой версии).
-        fields = self._lexical_fields(reader)
         viz: dict = {}
-        for code, value in fields.items():
-            gui_key = self._FT_TO_GUI.get(code)
-            if gui_key and value:
-                viz.setdefault(gui_key, value)
-        # Прямое чтение полей как дополнение (если что-то отдаётся отдельно).
         for key, code in (("PATRONYMIC", "MIDDLE_NAME"), ("BIRTHPLACE", "PLACE_OF_BIRTH"),
                           ("DATE_ISSUE", "DATE_OF_ISSUE"), ("ISSUED_BY", "AUTHORITY")):
-            if not viz.get(key):
-                val = self._text(reader, code)
-                if val:
-                    viz[key] = val
+            val = self._text(reader, code)
+            if val:
+                viz[key] = val
         images = self._save_images(reader, out_dir)
         return PassportCapture(image_paths=images, mrz_text=mrz_text, viz_fields=viz)
 
@@ -617,22 +614,19 @@ class RegulaScanner(BaseScanner):
         return b""
 
     def _save_images(self, reader, out_dir: str) -> List[str]:
-        """Сохранить портрет владельца и/или сырой снимок паспорта из SDK."""
+        """Сохранить ПОЛНЫЙ скан паспорта (без вырезки лица).
+
+        Берём доступный снимок страницы (белый кадр / графическое поле) и
+        сохраняем как passport_scan.jpg — лицо отдельно не вырезаем.
+        """
         os.makedirs(out_dir, exist_ok=True)
-        saved: List[str] = []
-        portrait = self._portrait_bytes(reader)
-        if portrait:
-            path = os.path.join(out_dir, "portrait.jpg")
-            with open(path, "wb") as fh:
-                fh.write(portrait)
-            saved.append(path)
-        raw = self._raw_image_bytes(reader)
-        if raw:
-            path = os.path.join(out_dir, "passport_scan.jpg")
-            with open(path, "wb") as fh:
-                fh.write(raw)
-            saved.append(path)
-        return saved
+        raw = self._raw_image_bytes(reader) or self._portrait_bytes(reader)
+        if not raw:
+            return []
+        path = os.path.join(out_dir, "passport_scan.jpg")
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        return [path]
 
     def scan_pages(self, out_dir: str, max_pages: Optional[int] = None) -> List[str]:
         # Постраничный захват разворотов на Regula 7017 — отдельный сценарий SDK,
