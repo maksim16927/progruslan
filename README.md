@@ -138,34 +138,38 @@ python server/backup.py --src X:\Archive --dest D:\Backups\Archive --keep 14 --m
 python -m unittest tests.test_core -v
 ```
 
-## Реальный сканер Regula 7017 (Desktop SDK)
+## Реальный сканер Regula 7017 (Passport Reader SDK, COM)
 
-Получение данных напрямую со сканера (встроенный модуль распознавания: MRZ + VIZ
-+ портрет) использует **Regula Document Reader Desktop SDK** (Windows, .dll +
-Python-обёртка `regula.documentreader.api`, поставляется Regula с лицензией).
+Поставка **Regula Passport Reader SDK** (`PasspR40.dll` и др.) регистрирует
+COM-компонент **`READERDEMO.RegulaReader`**. Программа подключается к нему из
+Python через **pywin32** (`win32com.client`). SDK сам управляет устройством и
+распознаёт документ (встроенный модуль): MRZ, визуальная зона (VIZ), портрет.
+Реализация — `RegulaScanner` в `armcore/scanners.py`.
 
-Настройка на рабочем месте со сканером:
+Настройка на рабочем месте со сканером (Windows):
 
-1. Установить Regula Document Reader Desktop SDK и активировать лицензию.
-2. Задать переменные окружения (или поля в `arm_config.json`):
-   - `ARM_REGULA_DLL` — путь к каталогу/.dll SDK;
-   - `ARM_REGULA_LICENSE` — путь к файлу лицензии;
-   - `ARM_MOCK_SCANNERS=0` — переключиться с mock на реальный сканер.
-3. Проверить связку **диагностическим скриптом** (без GUI):
+1. Установить Regula Passport Reader SDK (COM-объект `READERDEMO.RegulaReader`
+   должен быть зарегистрирован установщиком; иначе `regsvr32`).
+2. Установить pywin32: `pip install pywin32`.
+3. В `arm_config.json` поставить `"mock_scanners": false`.
+4. Проверить связку **диагностическим скриптом** (без GUI):
 
    ```bat
-   set ARM_REGULA_DLL=C:\Program Files\Regula\DocumentReaderSDK\bin
-   set ARM_REGULA_LICENSE=C:\Program Files\Regula\license\regula.license
-   python tools\regula_selftest.py
+   rem захват с устройства (положите паспорт на сканер):
+   py tools\regula_selftest.py
+
+   rem либо распознать готовый скан-файл (без устройства):
+   py tools\regula_selftest.py C:\путь\к\скану.jpg
    ```
 
-   Скрипт инициализирует SDK, делает захват + распознавание, печатает поля и
-   сохраняет снимок/портрет. Весь вывод и файлы — прислать разработчику для
-   финальной сверки имён полей под конкретную версию SDK.
+   Скрипт создаёт COM-объект, делает захват/распознавание, печатает MRZ и поля,
+   сохраняет портрет в `tools\regula_selftest_out`. Весь вывод и файлы —
+   прислать разработчику для финальной сверки под вашу версию SDK.
 
-> Точные имена классов/полей Python-обёртки различаются между версиями SDK.
-> Интеграция изолирована в `RegulaScanner` (`armcore/scanners.py`) и опирается на
-> типичный API; перед боевым запуском её сверяют по выводу `regula_selftest.py`.
+> Коды полей и методы (`GetTextFieldByType`, `GetMRZLines`,
+> `GetReaderGraphicsBitmapByFieldType`, `DoProcessImage`) взяты из поставки SDK
+> (READERDEMO_TLB, PasspR.h). Между версиями возможны отличия — сверяем по
+> выводу `regula_selftest.py`.
 
 ## Текущие ограничения
 

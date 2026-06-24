@@ -73,60 +73,77 @@ def _save_at_dpi(img: Image.Image, path: str, dpi: int = SCAN_DPI) -> str:
 #  Regula 7017 — каркас под реальный SDK
 # --------------------------------------------------------------------------- #
 class RegulaScanner(BaseScanner):
-    """Сканер паспортов Regula 7017 через Regula Document Reader **Desktop SDK**.
+    """Сканер паспортов Regula 7017 через COM-объект ``READERDEMO.RegulaReader``.
 
-    Desktop SDK (Windows, .dll + Python-обёртка из поставки Regula) сам управляет
-    устройством и выполняет распознавание: захват кадра (белый/УФ/ИК, 300 dpi),
-    чтение MRZ и визуальной зоны (VIZ), извлечение портрета. Программа получает
-    уже готовые поля — это и есть «зашитый модуль распознавания».
+    Поставка Regula Passport Reader SDK (PasspR40.dll и пр.) регистрирует
+    COM-компонент ``READERDEMO.RegulaReader``. Подключаемся к нему из Python через
+    pywin32 (``win32com.client``). SDK сам управляет устройством и выполняет
+    распознавание (встроенный модуль): MRZ, визуальная зона (VIZ), портрет.
 
-    ВНИМАНИЕ: точные имена классов/полей Python-обёртки различаются между версиями
-    SDK. Здесь интеграция изолирована в одном классе и опирается на типичный API
-    (DocumentReader / recognize / Text.get_field / Graphics). Перед боевым
-    запуском сверить вызовы с версией SDK на машине заказчика, прогнав
-    ``tools/regula_selftest.py``.
+    Поддерживаются два режима:
+      * захват с устройства — оператор кладёт паспорт, SDK обрабатывает;
+      * распознавание из файла — ``DoProcessImage`` (полезно для проверки без
+        сканера, по готовому скану).
+
+    Имена/коды взяты из поставки SDK (READERDEMO_TLB, PasspR.h): ProgID,
+    GetTextFieldByType / GetMRZLines / GetReaderGraphicsBitmapByFieldType,
+    коды полей eVisualFieldType и eGraphicFieldType.
     """
     name = "Regula 7017"
+    PROGID = "READERDEMO.RegulaReader"
+
+    # Коды текстовых полей (eVisualFieldType из READERDEMO_TLB).
+    _FT = {
+        "MRZ_STRINGS": 0x33,
+        "SURNAME": 0x08,
+        "GIVEN_NAMES": 0x09,
+        "MIDDLE_NAME": 0x92,
+        "DOC_NUMBER": 0x02,
+        "DATE_OF_BIRTH": 0x05,
+        "DATE_OF_EXPIRY": 0x03,
+        "DATE_OF_ISSUE": 0x04,
+        "NATIONALITY": 0x0B,
+        "NATIONALITY_CODE": 0x1A,
+        "PLACE_OF_BIRTH": 0x06,
+        "AUTHORITY": 0x18,
+    }
+    _GF_PORTRAIT = 0xC9
+    _RESULT_TYPE_TEXT = 0x24
 
     def __init__(self, dll_path: Optional[str] = None,
                  license_path: Optional[str] = None):
         self.dll_path = dll_path
         self.license_path = license_path
-        self._sdk = None
+        self._reader = None
 
     # ------------------------------------------------------------------ SDK
     def _load_sdk(self):
-        if self._sdk is not None:
-            return self._sdk
+        if self._reader is not None:
+            return self._reader
         try:
-            # Desktop-обёртка Regula Document Reader SDK.
-            from regula.documentreader.api import DocumentReader  # type: ignore
+            import win32com.client  # type: ignore  (pywin32, только Windows)
         except ImportError as e:
             raise ScannerError(
-                "Не найден Regula Document Reader Desktop SDK (Python-обёртка). "
-                "Установите SDK из поставки Regula (вместе с .dll) и пакет "
-                "regula.documentreader.api."
+                "Не установлен pywin32 (win32com) — нужен для подключения к "
+                "COM-объекту Regula. Установите: pip install pywin32."
             ) from e
-
-        license_data = None
-        if self.license_path:
-            if not os.path.exists(self.license_path):
-                raise ScannerError(f"Лицензия Regula не найдена: {self.license_path}")
-            with open(self.license_path, "rb") as fh:
-                license_data = fh.read()
         try:
-            # Инициализация рантайма SDK с лицензией; путь к .dll задаётся
-            # переменной окружения/поставкой SDK.
-            reader = DocumentReader()
-            reader.initialize_reader(license_data) if license_data else \
-                reader.initialize_reader()
+            reader = win32com.client.Dispatch(self.PROGID)
         except Exception as e:  # noqa: BLE001
             raise ScannerError(
-                f"Не удалось инициализировать Regula SDK: {e}. "
-                "Проверьте .dll (ARM_REGULA_DLL) и лицензию (ARM_REGULA_LICENSE)."
+                f"Не удалось создать COM-объект {self.PROGID}: {e}. "
+                "Проверьте, что Regula SDK установлен и зарегистрирован "
+                "(regsvr32), а сканер подключён."
             ) from e
-        self._sdk = reader
-        return self._sdk
+        # Включаем распознавание MRZ и графики (портрет).
+        for prop, val in (("DoMRZOCR", True), ("DoGraphics", True),
+                          ("InBackground", False)):
+            try:
+                setattr(reader, prop, val)
+            except Exception:  # noqa: BLE001 — свойство может называться иначе
+                pass
+        self._reader = reader
+        return self._reader
 
     def is_available(self) -> bool:
         try:
@@ -136,99 +153,107 @@ class RegulaScanner(BaseScanner):
             return False
 
     # -------------------------------------------------------------- захват
-    def capture_passport(self, out_dir: str) -> PassportCapture:
+    def capture_passport(self, out_dir: str, timeout_s: int = 30) -> PassportCapture:
+        """Захват с устройства: ждём, пока оператор положит паспорт и SDK обработает."""
         reader = self._load_sdk()
-        # Захват кадра с устройства Regula 7017 (белый/УФ/ИК, 300 dpi) и
-        # распознавание встроенным модулем SDK -> готовые MRZ и VIZ.
         try:
-            response = self._recognize_from_device(reader)
-        except ScannerError:
-            raise
+            if hasattr(reader, "Connect"):
+                reader.Connect()
         except Exception as e:  # noqa: BLE001
-            raise ScannerError(f"Regula: ошибка захвата/распознавания: {e}") from e
+            raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
+        self._wait_for_result(reader, timeout_s)
+        return self._collect(reader, out_dir)
 
-        mrz_text = self._field(response, "mrz_strings") or self._field(response, "mrz")
-        viz = self._extract_viz(response)
-        images = self._save_response_images(response, out_dir)
-        return PassportCapture(image_paths=images, mrz_text=mrz_text or "",
-                               viz_fields=viz)
+    def process_image(self, image_path: str, out_dir: str) -> PassportCapture:
+        """Распознать готовый файл-скан через SDK (без устройства)."""
+        reader = self._load_sdk()
+        if not os.path.exists(image_path):
+            raise ScannerError(f"Файл не найден: {image_path}")
+        try:
+            reader.DoProcessImage(os.path.abspath(image_path))
+        except Exception as e:  # noqa: BLE001
+            raise ScannerError(f"Regula: ошибка DoProcessImage: {e}") from e
+        return self._collect(reader, out_dir)
 
-    def _recognize_from_device(self, reader):
-        """Захватить кадр с устройства и распознать.
-
-        Реализация зависит от версии Desktop SDK. Типовой путь: получить кадр
-        со сканера (reader.scan/grab) и передать в reader.recognize(...) со
-        сценарием FullProcess. Точные имена сверяются self-test'ом.
-        """
-        if not hasattr(reader, "recognize"):
-            raise ScannerError(
-                "Версия Regula SDK не поддерживает ожидаемый API recognize(); "
-                "сверьте вызовы через tools/regula_selftest.py."
-            )
-        # Захват изображения с устройства (метод зависит от версии SDK).
-        if hasattr(reader, "scan"):
-            image = reader.scan()
-            return reader.recognize(image)
-        # Некоторые версии совмещают захват и распознавание в одном вызове.
-        return reader.recognize()
+    def _wait_for_result(self, reader, timeout_s: int):
+        """Ждать появления текстового результата (документ обработан)."""
+        import time
+        try:
+            import pythoncom  # type: ignore
+        except ImportError:
+            pythoncom = None
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if pythoncom is not None:
+                pythoncom.PumpWaitingMessages()  # обработать COM-события
+            try:
+                if reader.IsReaderResultTypeAvailable(self._RESULT_TYPE_TEXT) > 0:
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.2)
+        raise ScannerError(
+            "Regula: не дождались результата распознавания (положите паспорт на "
+            "сканер). Если устройство недоступно — проверьте подключение."
+        )
 
     # ------------------------------------------------------------- разбор
-    @staticmethod
-    def _field(response, name: str) -> str:
-        """Достать текстовое поле из ответа SDK по логическому имени (best-effort)."""
+    def _collect(self, reader, out_dir: str) -> PassportCapture:
+        """Собрать MRZ, VIZ и изображения из текущего результата SDK."""
+        mrz_text = self._mrz(reader)
+        viz = {
+            "PATRONYMIC": self._text(reader, "MIDDLE_NAME"),
+            "BIRTHPLACE": self._text(reader, "PLACE_OF_BIRTH"),
+            "DATE_ISSUE": self._text(reader, "DATE_OF_ISSUE"),
+            "ISSUED_BY": self._text(reader, "AUTHORITY"),
+        }
+        viz = {k: v for k, v in viz.items() if v}
+        images = self._save_images(reader, out_dir)
+        return PassportCapture(image_paths=images, mrz_text=mrz_text, viz_fields=viz)
+
+    def _text(self, reader, key: str) -> str:
         try:
-            text = getattr(response, "text", None)
-            if text is None:
-                return ""
-            getter = getattr(text, "get_field_value", None)
-            if getter:
-                return getter(name) or ""
-            return getattr(text, name, "") or ""
+            val = reader.GetTextFieldByType(self._FT[key])
+            return str(val).strip() if val is not None else ""
         except Exception:  # noqa: BLE001
             return ""
 
-    def _extract_viz(self, response) -> dict:
-        """Поля визуальной зоны (нет в MRZ) -> ключи полей GUI."""
-        viz = {
-            "PATRONYMIC": self._field(response, "middle_name"),
-            "BIRTHPLACE": self._field(response, "place_of_birth"),
-            "DATE_ISSUE": self._field(response, "date_of_issue"),
-            "ISSUED_BY": self._field(response, "authority"),
-        }
-        return {k: v for k, v in viz.items() if v}
+    def _mrz(self, reader) -> str:
+        """MRZ-строки: сначала GetMRZLines(), иначе поле ft_MRZ_Strings."""
+        try:
+            lines = reader.GetMRZLines()
+            if lines:
+                if isinstance(lines, (list, tuple)):
+                    return "\n".join(str(x) for x in lines if x)
+                return str(lines).replace("\r\n", "\n").strip()
+        except Exception:  # noqa: BLE001
+            pass
+        return self._text(reader, "MRZ_STRINGS").replace("\r\n", "\n")
 
-    @staticmethod
-    def _save_response_images(response, out_dir: str) -> List[str]:
-        """Сохранить снимок паспорта и портрет владельца из ответа SDK."""
+    def _save_images(self, reader, out_dir: str) -> List[str]:
+        """Сохранить портрет владельца из результата SDK."""
         os.makedirs(out_dir, exist_ok=True)
         saved: List[str] = []
-        graphics = getattr(response, "graphics", None)
-        # Снимок документа.
-        for attr, fname in (("document_image", "passport_00.jpg"),
-                            ("portrait", "portrait.jpg")):
-            try:
-                getter = getattr(graphics, "get_field_image", None) if graphics else None
-                data = getter(attr) if getter else None
-                if data:
-                    path = os.path.join(out_dir, fname)
+        try:
+            data = reader.GetReaderGraphicsBitmapByFieldType(self._GF_PORTRAIT)
+            if data is not None and not isinstance(data, bool):
+                raw = bytes(data)
+                if raw:
+                    path = os.path.join(out_dir, "portrait.jpg")
                     with open(path, "wb") as fh:
-                        fh.write(data)
+                        fh.write(raw)
                     saved.append(path)
-            except Exception:  # noqa: BLE001 — отсутствие поля не критично
-                pass
+        except Exception:  # noqa: BLE001 — портрет может отсутствовать
+            pass
         return saved
 
     def scan_pages(self, out_dir: str, max_pages: Optional[int] = None) -> List[str]:
-        reader = self._load_sdk()
-        # Режим booksheet — постранично со сканера при 300 dpi (ТЗ, п.3.1(3), 5.1).
-        if not hasattr(reader, "scan_pages"):
-            raise ScannerError(
-                "Версия Regula SDK не поддерживает постраничный захват; "
-                "сверьте вызовы через tools/regula_selftest.py."
-            )
-        os.makedirs(out_dir, exist_ok=True)
-        paths = reader.scan_pages(out_dir, max_pages)  # зависит от версии SDK
-        return list(paths)[:max_pages] if max_pages else list(paths)
+        # Постраничный захват разворотов на Regula 7017 — отдельный сценарий SDK,
+        # уточняется по документации COM-интерфейса при наличии устройства.
+        raise ScannerError(
+            "scan_pages для Regula: используйте «Выбрать страницы паспорта…» или "
+            "уточните сценарий booksheet по COM-документации SDK."
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -1,40 +1,38 @@
 #!/usr/bin/env python3
 """
-Диагностика реального сканера Regula 7017 (Desktop SDK).
+Диагностика сканера Regula 7017 (COM-объект READERDEMO.RegulaReader).
 
-Запускается на Windows-ПК, к которому подключён сканер Regula 7017 и установлен
-Regula Document Reader **Desktop SDK** (.dll + Python-обёртка) с активной
-лицензией. Скрипт:
+Поставка Regula Passport Reader SDK регистрирует COM-компонент
+``READERDEMO.RegulaReader``. Скрипт подключается к нему через pywin32 и:
 
-  1. проверяет наличие SDK, .dll и лицензии;
-  2. инициализирует SDK и перечисляет устройства;
-  3. делает один захват + распознавание паспорта;
-  4. печатает найденные поля (MRZ, ФИО, гражданство, даты, VIZ);
-  5. сохраняет снимок паспорта и портрет в папку вывода.
+  1. создаёт COM-объект (проверка, что SDK установлен/зарегистрирован);
+  2. РЕЖИМ А (по умолчанию): ждёт, пока оператор положит паспорт на сканер;
+     РЕЖИМ Б (если передать путь к скану): распознаёт файл через DoProcessImage;
+  3. печатает MRZ и поля визуальной зоны (ФИО, даты, орган и т.д.);
+  4. сохраняет портрет в папку вывода.
 
-Весь вывод (текст в консоли + файлы из папки вывода) нужно прислать разработчику
-— по нему сверяются точные имена классов/полей под установленную версию SDK.
+Запуск (Windows):
 
-Запуск (Windows, cmd):
+    pip install pywin32
+    rem с устройства (положите паспорт):
+    py tools\\regula_selftest.py
+    rem из готового скана (без устройства):
+    py tools\\regula_selftest.py C:\\путь\\к\\скану.jpg
 
-    set ARM_REGULA_DLL=C:\\Program Files\\Regula\\DocumentReaderSDK\\bin
-    set ARM_REGULA_LICENSE=C:\\Program Files\\Regula\\license\\regula.license
-    python tools\\regula_selftest.py
-
-Скрипт самодостаточен: не требует GUI и не меняет конфигурацию программы.
+Весь вывод + папку tools\\regula_selftest_out пришлите разработчику.
 """
 from __future__ import annotations
 
 import os
 import sys
 
-# Чтобы скрипт работал из любой папки — добавляем корень проекта в путь.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from armcore import scanners  # noqa: E402
+from armcore import mrz as mrz_parser  # noqa: E402
 
 
 def _hr(title: str) -> None:
@@ -43,75 +41,66 @@ def _hr(title: str) -> None:
     print("=" * 60)
 
 
-def main() -> int:
+def main(argv) -> int:
     out_dir = os.path.join(_HERE, "regula_selftest_out")
-    dll = os.environ.get("ARM_REGULA_DLL", "")
-    lic = os.environ.get("ARM_REGULA_LICENSE", "")
+    image = argv[1] if len(argv) > 1 else None
 
-    _hr("1. Параметры окружения")
-    print(f"ARM_REGULA_DLL      = {dll or '(не задан)'}")
-    print(f"ARM_REGULA_LICENSE  = {lic or '(не задан)'}")
-    print(f"Папка вывода        = {out_dir}")
-    if lic:
-        print(f"Файл лицензии есть?  = {os.path.exists(lic)}")
+    _hr("1. Подключение к COM-объекту Regula")
+    print(f"ProgID        = {scanners.RegulaScanner.PROGID}")
+    print(f"Папка вывода  = {out_dir}")
+    print(f"Режим         = {'из файла: ' + image if image else 'захват с устройства'}")
 
-    scanner = scanners.RegulaScanner(dll_path=dll or None, license_path=lic or None)
-
-    _hr("2. Инициализация SDK")
+    scanner = scanners.RegulaScanner()
     try:
         scanner._load_sdk()
-        print("OK: SDK инициализирован.")
+        print("OK: COM-объект создан, распознавание включено.")
     except scanners.ScannerError as e:
-        print("ОШИБКА инициализации SDK:")
+        print("ОШИБКА подключения к SDK:")
         print(" ", e)
-        print("\nДальше двигаться нельзя — пришлите этот вывод разработчику.")
+        print("\nПришлите этот вывод разработчику.")
         return 2
 
-    _hr("3. Захват и распознавание паспорта")
-    print("Положите паспорт на сканер и подождите...")
+    _hr("2. Захват и распознавание")
     try:
-        cap = scanner.capture_passport(out_dir)
+        if image:
+            cap = scanner.process_image(image, out_dir)
+        else:
+            print("Положите паспорт на сканер, ожидание до 30 сек...")
+            cap = scanner.capture_passport(out_dir, timeout_s=30)
     except scanners.ScannerError as e:
         print("ОШИБКА захвата/распознавания:")
         print(" ", e)
-        print("\nПришлите этот вывод разработчику (возможно, отличается версия API SDK).")
+        print("\nПришлите этот вывод разработчику.")
         return 3
 
-    _hr("4. Результат распознавания")
-    print("MRZ (сырой текст):")
+    _hr("3. Результат")
+    print("MRZ:")
     print(cap.mrz_text or "  (пусто)")
     print("\nПоля визуальной зоны (VIZ):")
-    if cap.viz_fields:
-        for k, v in cap.viz_fields.items():
-            print(f"  {k}: {v}")
-    else:
+    for k, v in (cap.viz_fields or {}).items():
+        print(f"  {k}: {v}")
+    if not cap.viz_fields:
         print("  (пусто)")
-
     print("\nСохранённые изображения:")
-    if cap.image_paths:
-        for p in cap.image_paths:
-            print(f"  {p}")
-    else:
-        print("  (нет — SDK не вернул графические поля)")
+    for p in cap.image_paths or []:
+        print(f"  {p}")
+    if not cap.image_paths:
+        print("  (нет — портрет не получен)")
 
-    # Разбор MRZ общим парсером — как в программе.
     if cap.mrz_text:
-        from armcore import mrz as mrz_parser
         res = mrz_parser.parse(cap.mrz_text)
-        _hr("5. Разбор MRZ парсером программы")
+        _hr("4. Разбор MRZ парсером программы")
         if res:
             for k, v in res.to_fields().items():
                 print(f"  {k}: {v}")
             print(f"\n  Контрольные цифры сошлись: {res.valid}")
         else:
-            print("  Парсер не смог разобрать MRZ (проверьте формат).")
+            print("  Не удалось разобрать MRZ.")
 
     _hr("ГОТОВО")
-    print("Скопируйте весь вывод выше и содержимое папки вывода —")
-    print(f"  {out_dir}")
-    print("и пришлите разработчику для финальной настройки.")
+    print(f"Скопируйте вывод выше и содержимое папки:\n  {out_dir}\nи пришлите разработчику.")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))
