@@ -212,15 +212,14 @@ class RegulaScanner(BaseScanner):
         return self._collect(reader, out_dir)
 
     def _result_ready(self, reader) -> bool:
-        """Готов ли результат: Text/OCRLexical/Graphics доступны или поля непусты."""
-        for code in (self._RESULT_TYPE_TEXT, 0x25, 0x06):  # Text, OCRLexical, Graphics
-            try:
-                if int(reader.IsReaderResultTypeAvailable(code)) > 0:
-                    return True
-            except Exception:  # noqa: BLE001
-                pass
-        # Прямое чтение — иногда поля доступны раньше «флага готовности».
-        if self._mrz(reader) or self._text(reader, "SURNAME"):
+        """Готов ли результат: есть РЕАЛЬНЫЕ данные (MRZ или распознанные поля).
+
+        Не полагаемся только на «тип результата доступен» — он бывает =1, но с
+        пустым fieldList (распознавание ещё не завершено). Ждём настоящие данные.
+        """
+        if self._mrz(reader):
+            return True
+        if self._lexical_fields(reader):
             return True
         return False
 
@@ -266,6 +265,15 @@ class RegulaScanner(BaseScanner):
     def lexical_xml(self, reader=None) -> str:
         """XML результата OCRLexicalAnalyze (там лежат распознанные поля)."""
         reader = reader or self._load_sdk()
+        for code in (0x25, self._RESULT_TYPE_TEXT):  # OCRLexical, Text
+            for args in ((code, 0, 0), (code, 0)):
+                try:
+                    xml = reader.CheckReaderResultXML(*args)
+                    if xml and "Field" in str(xml):
+                        return str(xml)
+                except Exception:  # noqa: BLE001
+                    continue
+        # вернуть хоть что-то для диагностики
         for args in ((0x25, 0, 0), (0x25, 0)):
             try:
                 xml = reader.CheckReaderResultXML(*args)
@@ -275,17 +283,68 @@ class RegulaScanner(BaseScanner):
                 continue
         return ""
 
+    def _lexical_fields(self, reader) -> dict:
+        """Разобрать XML распознавания -> {код_поля(int): значение(str)}.
+
+        Толерантно к формату: ищем элементы с FieldType и берём значение из
+        Field_Visual / Field_MRZ / Buf_Text / Value.
+        """
+        xml = self.lexical_xml(reader)
+        out: dict = {}
+        if not xml:
+            return out
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(xml)
+        except Exception:  # noqa: BLE001
+            return out
+
+        def local(tag: str) -> str:
+            return tag.split("}")[-1]
+
+        for el in root.iter():
+            children = {local(c.tag): (c.text or "").strip() for c in list(el)}
+            if "FieldType" not in children:
+                continue
+            ft = children.get("FieldType", "")
+            val = (children.get("Field_Visual") or children.get("Buf_Text")
+                   or children.get("Field_MRZ") or children.get("Value") or "")
+            if not ft or not val:
+                continue
+            try:
+                out[int(ft)] = val
+            except ValueError:
+                pass
+        return out
+
+    # Коды полей (eVisualFieldType) -> ключи полей GUI.
+    _FT_TO_GUI = {
+        0x08: "FAMILY", 0x09: "NAME", 0x92: "PATRONYMIC",
+        0x02: "PASSPORT_NUMBER", 0x05: "BIRTHDAY", 0x03: "DATE_END",
+        0x04: "DATE_ISSUE", 0x06: "BIRTHPLACE", 0x18: "ISSUED_BY",
+        0x1A: "COUNTRY_CODE", 0x0B: "COUNTRY_CODE",
+        0x1B: "REG_ADDRESS", 0x45: "REG_ADDRESS",
+        0x0D: "PERSONAL_ID",
+    }
+
     def _collect(self, reader, out_dir: str) -> PassportCapture:
-        """Собрать MRZ, VIZ и изображения из текущего результата SDK."""
+        """Собрать MRZ, поля и изображения из текущего результата SDK."""
         self._select_text_result(reader)
         mrz_text = self._mrz(reader)
-        viz = {
-            "PATRONYMIC": self._text(reader, "MIDDLE_NAME"),
-            "BIRTHPLACE": self._text(reader, "PLACE_OF_BIRTH"),
-            "DATE_ISSUE": self._text(reader, "DATE_OF_ISSUE"),
-            "ISSUED_BY": self._text(reader, "AUTHORITY"),
-        }
-        viz = {k: v for k, v in viz.items() if v}
+        # Поля из XML распознавания (надёжнее GetTextFieldByType на этой версии).
+        fields = self._lexical_fields(reader)
+        viz: dict = {}
+        for code, value in fields.items():
+            gui_key = self._FT_TO_GUI.get(code)
+            if gui_key and value:
+                viz.setdefault(gui_key, value)
+        # Прямое чтение полей как дополнение (если что-то отдаётся отдельно).
+        for key, code in (("PATRONYMIC", "MIDDLE_NAME"), ("BIRTHPLACE", "PLACE_OF_BIRTH"),
+                          ("DATE_ISSUE", "DATE_OF_ISSUE"), ("ISSUED_BY", "AUTHORITY")):
+            if not viz.get(key):
+                val = self._text(reader, code)
+                if val:
+                    viz[key] = val
         images = self._save_images(reader, out_dir)
         return PassportCapture(image_paths=images, mrz_text=mrz_text, viz_fields=viz)
 
