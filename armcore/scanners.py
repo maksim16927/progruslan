@@ -316,30 +316,64 @@ class RegulaScanner(BaseScanner):
                 return data.encode("latin-1", "ignore")
         return b""
 
+    def _select_graphics_result(self, reader):
+        """Выбрать результат графики перед чтением битмапа (как в C#-примере)."""
+        for args in (
+            (0x06, 0, 0, ""),   # CheckReaderResult(Graphics, 0, 0, "")
+            (0x06, 0, 0),
+        ):
+            try:
+                reader.CheckReaderResult(*args)
+                return
+            except Exception:  # noqa: BLE001 — пробуем следующую сигнатуру
+                continue
+
+    def _portrait_bytes(self, reader) -> bytes:
+        """Получить байты портрета: с предварительным выбором результата графики."""
+        self._select_graphics_result(reader)
+        for getter, args in (
+            ("GetReaderGraphicsBitmapByFieldType", (self._GF_PORTRAIT,)),
+            ("GetReaderGraphicsBitmapByFieldTypeAndSource", (self._GF_PORTRAIT, 0)),
+            ("GetGraphicFieldByTypeAndSource", (self._GF_PORTRAIT, 0)),
+        ):
+            try:
+                fn = getattr(reader, getter, None)
+                if fn is None:
+                    continue
+                raw = self._to_bytes(fn(*args))
+                if raw:
+                    return raw
+            except Exception:  # noqa: BLE001
+                continue
+        return b""
+
     def graphics_info(self, reader=None) -> str:
         """Диагностика портрета: тип и размер данных, что отдаёт SDK."""
         reader = reader or self._load_sdk()
+        self._select_graphics_result(reader)
+        out = []
+        try:
+            avail = int(reader.IsReaderResultTypeAvailable(0x06))
+            out.append(f"Graphics доступно={avail}")
+        except Exception as e:  # noqa: BLE001
+            out.append(f"IsReaderResultTypeAvailable(Graphics) err: {e}")
         try:
             data = reader.GetReaderGraphicsBitmapByFieldType(self._GF_PORTRAIT)
+            out.append(f"тип={type(data).__name__}, байт={len(self._to_bytes(data))}")
         except Exception as e:  # noqa: BLE001
-            return f"ошибка вызова GetReaderGraphicsBitmapByFieldType: {e}"
-        raw = self._to_bytes(data)
-        return f"тип={type(data).__name__}, байт={len(raw)}"
+            out.append(f"GetReaderGraphicsBitmapByFieldType err: {e}")
+        return "; ".join(out)
 
     def _save_images(self, reader, out_dir: str) -> List[str]:
         """Сохранить портрет владельца из результата SDK."""
         os.makedirs(out_dir, exist_ok=True)
         saved: List[str] = []
-        try:
-            data = reader.GetReaderGraphicsBitmapByFieldType(self._GF_PORTRAIT)
-            raw = self._to_bytes(data)
-            if raw:
-                path = os.path.join(out_dir, "portrait.jpg")
-                with open(path, "wb") as fh:
-                    fh.write(raw)
-                saved.append(path)
-        except Exception:  # noqa: BLE001 — портрет может отсутствовать
-            pass
+        raw = self._portrait_bytes(reader)
+        if raw:
+            path = os.path.join(out_dir, "portrait.jpg")
+            with open(path, "wb") as fh:
+                fh.write(raw)
+            saved.append(path)
         return saved
 
     def scan_pages(self, out_dir: str, max_pages: Optional[int] = None) -> List[str]:
