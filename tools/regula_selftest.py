@@ -42,10 +42,19 @@ def _hr(title: str) -> None:
 
 
 def main(argv) -> int:
+    import datetime
+    import shutil
     out_dir = os.path.join(_HERE, "regula_selftest_out")
     image = argv[1] if len(argv) > 1 else None
 
+    # Чистим папку вывода — чтобы старые фото/диагностика не путались с новыми.
+    if os.path.isdir(out_dir):
+        shutil.rmtree(out_dir, ignore_errors=True)
+    os.makedirs(out_dir, exist_ok=True)
+    run_stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     _hr("1. Подключение к COM-объекту Regula")
+    print(f"ВРЕМЯ ЗАПУСКА = {run_stamp}")
     print(f"ProgID        = {scanners.RegulaScanner.PROGID}")
     print(f"Папка вывода  = {out_dir}")
     print(f"Режим         = {'из файла: ' + image if image else 'захват с устройства'}")
@@ -76,7 +85,7 @@ def main(argv) -> int:
 
     # Полная диагностика — пишем в файл и открываем (даже при таймауте захвата).
     lines = []
-    lines.append("=== REGULA SELFTEST DIAG ===")
+    lines.append(f"=== REGULA SELFTEST DIAG ({run_stamp}) ===")
     if capture_error:
         lines.append(f"CAPTURE_ERROR: {capture_error}")
     try:
