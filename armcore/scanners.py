@@ -235,23 +235,27 @@ class RegulaScanner(BaseScanner):
             raise ScannerError(f"Regula: ошибка DoProcessImage: {e}") from e
         return self._collect(reader, out_dir)
 
-    def _full_result_ready(self, reader) -> bool:
-        """Полный результат: есть белый снимок (Graphics) ИЛИ распознанные поля."""
-        try:
-            if int(reader.IsReaderResultTypeAvailable(0x06)) > 0:  # Graphics/портрет
-                return True
-        except Exception:  # noqa: BLE001
-            pass
+    def _has_text(self, reader) -> bool:
+        """Есть ли распознанный текст (MRZ или поля)."""
+        if self._mrz(reader):
+            return True
         if self._lexical_fields(reader):
             return True
         return False
 
-    def _wait_for_result(self, reader, timeout_s: int, grace_after_mrz_s: float = 10.0):
-        """Ждать ПОЛНЫЙ результат (белый снимок + визуальные поля), не только MRZ.
+    def _has_portrait(self, reader) -> bool:
+        """Доступен ли белый снимок/портрет (графика)."""
+        try:
+            return int(reader.IsReaderResultTypeAvailable(0x06)) > 0
+        except Exception:  # noqa: BLE001
+            return False
 
-        MRZ появляется быстро (ИК-чтение), но визуальная OCR и портрет приходят
-        позже. Поэтому, увидев MRZ, не останавливаемся сразу — даём время на
-        полную обработку (grace_after_mrz_s). MRZ-only — лишь запасной вариант.
+    def _wait_for_result(self, reader, timeout_s: int, grace_s: float = 12.0):
+        """Ждать, пока готовы И текст, И портрет.
+
+        Текст (MRZ) и портрет приходят в разные моменты обработки. Поэтому ждём
+        оба; если за grace_s после появления первого второй не пришёл — работаем
+        с тем, что есть (частичный результат лучше зависания).
         """
         import time
         try:
@@ -259,20 +263,22 @@ class RegulaScanner(BaseScanner):
         except ImportError:
             pythoncom = None
         deadline = time.monotonic() + timeout_s
-        mrz_seen_at = None
+        first_seen_at = None
         while time.monotonic() < deadline:
             if pythoncom is not None:
                 pythoncom.PumpWaitingMessages()  # прокачать COM-события
-            if self._full_result_ready(reader):
-                return  # полный результат — лучший случай
-            if self._mrz(reader):
-                if mrz_seen_at is None:
-                    mrz_seen_at = time.monotonic()
-                elif time.monotonic() - mrz_seen_at >= grace_after_mrz_s:
-                    return  # полного нет, но MRZ есть — работаем по MRZ
+            text = self._has_text(reader)
+            portrait = self._has_portrait(reader)
+            if text and portrait:
+                return  # полный результат
+            if text or portrait:
+                if first_seen_at is None:
+                    first_seen_at = time.monotonic()
+                elif time.monotonic() - first_seen_at >= grace_s:
+                    return  # вторая часть не пришла — берём что есть
             time.sleep(0.3)
-        # Таймаут: если хоть что-то распозналось — продолжаем, иначе ошибка.
-        if self._mrz(reader) or self._lexical_fields(reader):
+        # Таймаут: если хоть что-то есть — продолжаем, иначе ошибка.
+        if self._has_text(reader) or self._has_portrait(reader):
             return
         diag = self.diagnostics(reader)
         raise ScannerError(
