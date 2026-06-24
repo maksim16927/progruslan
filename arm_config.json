@@ -1,4 +1,8 @@
 {
+  "archive_root": "c:\\!_Projects\\progruslan\\arhive",
   "templates_dir": "c:\\!_Projects\\progruslan\\arhive\\_templates",
-  "mock_scanners": true
+  "server_url": "http://127.0.0.1:8770",
+  "mock_scanners": true,
+  "regula_dll_path": "c:\\Program Files (x86)\\Regula\\Document Reader SDK",
+  "regula_license_path": "c:\\Program Files (x86)\\Regula\\license\\regula.license"
 }
