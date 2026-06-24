@@ -465,8 +465,51 @@ class RegulaScanner(BaseScanner):
             except Exception:  # noqa: BLE001 — пробуем следующую сигнатуру
                 continue
 
+    def _portrait_from_xml(self, reader) -> bytes:
+        """Портрет из XML результата (base64 JPEG, fieldType 201/Portrait).
+
+        Самый надёжный способ: SDK кладёт портрет готовым JPEG в base64 в
+        TImageField с fieldType=201 (gf_Portrait). Берём из любого XML, где он есть.
+        """
+        import base64
+        import xml.etree.ElementTree as ET
+
+        def local(tag: str) -> str:
+            return tag.split("}")[-1]
+
+        for code in (0x06, 0x01, 0x25, self._RESULT_TYPE_TEXT):  # Graphics/RawImage/...
+            for args in ((code, 0, 0), (code, 0)):
+                try:
+                    xml = reader.CheckReaderResultXML(*args)
+                except Exception:  # noqa: BLE001
+                    continue
+                if not xml or "Portrait" not in str(xml):
+                    continue
+                try:
+                    root = ET.fromstring(str(xml))
+                except Exception:  # noqa: BLE001
+                    continue
+                for el in root.iter():
+                    if local(el.tag) != "TImageField":
+                        continue
+                    ch = {local(c.tag): c for c in list(el)}
+                    ft = (ch.get("fieldType").text or "").strip() if ch.get("fieldType") is not None else ""
+                    if ft and ft not in ("201",):
+                        continue
+                    # Найти текст value внутри valueList.
+                    for v in el.iter():
+                        if local(v.tag) == "value" and (v.text or "").strip():
+                            try:
+                                return base64.b64decode(v.text.strip())
+                            except Exception:  # noqa: BLE001
+                                pass
+        return b""
+
     def _portrait_bytes(self, reader) -> bytes:
-        """Получить байты портрета: с предварительным выбором результата графики."""
+        """Получить байты портрета: из XML (base64 JPEG) либо COM-методом."""
+        raw = self._portrait_from_xml(reader)
+        if raw:
+            return raw
         self._select_graphics_result(reader)
         for getter, args in (
             ("GetReaderGraphicsBitmapByFieldType", (self._GF_PORTRAIT,)),
