@@ -114,8 +114,18 @@ def main(argv) -> int:
         else:
             print("  Не удалось разобрать MRZ.")
 
-    _hr("ГОТОВО")
-    print(f"Скопируйте вывод выше и содержимое папки:\n  {out_dir}\nи пришлите разработчику.")
+    # Диагностика портрета и полей — В САМОМ КОНЦЕ (чтобы попадала в копию снизу).
+    _hr("ГОТОВО — пришлите ВСЁ, что ниже")
+    try:
+        print("PORTRAIT_DIAG:", scanner.graphics_info())
+    except Exception as e:  # noqa: BLE001
+        print("PORTRAIT_DIAG: ошибка:", e)
+    try:
+        fields = scanner.dump_text_fields()
+        print("FIELDS_DIAG:", fields if fields else "(пусто)")
+    except Exception as e:  # noqa: BLE001
+        print("FIELDS_DIAG: ошибка:", e)
+    print(f"OUT_DIR: {out_dir}")
     return 0
 
 
