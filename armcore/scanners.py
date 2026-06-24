@@ -247,8 +247,19 @@ class RegulaScanner(BaseScanner):
         )
 
     # ------------------------------------------------------------- разбор
+    def _select_text_result(self, reader):
+        """Выбрать текстовый результат перед чтением полей (как для графики)."""
+        for code in (self._RESULT_TYPE_TEXT, 0x25):  # Text, OCRLexicalAnalyze
+            for args in ((code, 0, 0, ""), (code, 0, 0)):
+                try:
+                    reader.CheckReaderResult(*args)
+                    return
+                except Exception:  # noqa: BLE001
+                    continue
+
     def _collect(self, reader, out_dir: str) -> PassportCapture:
         """Собрать MRZ, VIZ и изображения из текущего результата SDK."""
+        self._select_text_result(reader)
         mrz_text = self._mrz(reader)
         viz = {
             "PATRONYMIC": self._text(reader, "MIDDLE_NAME"),
@@ -270,6 +281,7 @@ class RegulaScanner(BaseScanner):
     def dump_text_fields(self, reader=None) -> dict:
         """Все непустые текстовые поля, которые отдаёт SDK (для диагностики)."""
         reader = reader or self._load_sdk()
+        self._select_text_result(reader)
         out = {}
         for name, code in self._FT_DUMP.items():
             try:
