@@ -1,0 +1,12 @@
+{
+  "_комментарий": "Скопируйте этот файл как arm_config.json (рядом с bary_de.py) и поправьте под свою машину. arm_config.json в гит не коммитится.",
+
+  "archive_root": "X:\\Archive",
+  "templates_dir": "X:\\Archive\\_templates",
+  "server_url": "http://127.0.0.1:8770",
+
+  "_сканеры": "mock_scanners=false включает реальный сканер Regula 7017 (нужен Desktop SDK + лицензия). true = работа без железа (mock).",
+  "mock_scanners": true,
+  "regula_dll_path": "C:\\Program Files\\Regula\\DocumentReaderSDK\\bin",
+  "regula_license_path": "C:\\Program Files\\Regula\\license\\regula.license"
+}

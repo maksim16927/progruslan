@@ -101,7 +101,11 @@ python server/backup.py --src X:\Archive --dest D:\Backups\Archive --keep 14 --m
 ## Конфигурация
 
 Настройки — в `armcore/config.py`. Переопределяются файлом `arm_config.json`
-рядом с программой или переменными окружения:
+рядом с программой или переменными окружения.
+
+> **Где взять `arm_config.json`:** он НЕ хранится в гите (в нём локальные пути
+> конкретной машины). Скопируйте шаблон `arm_config.example.json` → `arm_config.json`
+> и поправьте пути под себя. На Windows (cmd): `copy arm_config.example.json arm_config.json`.
 
 | Переменная | Назначение | По умолчанию |
 |---|---|---|
