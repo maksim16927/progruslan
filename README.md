@@ -134,6 +134,35 @@ python server/backup.py --src X:\Archive --dest D:\Backups\Archive --keep 14 --m
 python -m unittest tests.test_core -v
 ```
 
+## Реальный сканер Regula 7017 (Desktop SDK)
+
+Получение данных напрямую со сканера (встроенный модуль распознавания: MRZ + VIZ
++ портрет) использует **Regula Document Reader Desktop SDK** (Windows, .dll +
+Python-обёртка `regula.documentreader.api`, поставляется Regula с лицензией).
+
+Настройка на рабочем месте со сканером:
+
+1. Установить Regula Document Reader Desktop SDK и активировать лицензию.
+2. Задать переменные окружения (или поля в `arm_config.json`):
+   - `ARM_REGULA_DLL` — путь к каталогу/.dll SDK;
+   - `ARM_REGULA_LICENSE` — путь к файлу лицензии;
+   - `ARM_MOCK_SCANNERS=0` — переключиться с mock на реальный сканер.
+3. Проверить связку **диагностическим скриптом** (без GUI):
+
+   ```bat
+   set ARM_REGULA_DLL=C:\Program Files\Regula\DocumentReaderSDK\bin
+   set ARM_REGULA_LICENSE=C:\Program Files\Regula\license\regula.license
+   python tools\regula_selftest.py
+   ```
+
+   Скрипт инициализирует SDK, делает захват + распознавание, печатает поля и
+   сохраняет снимок/портрет. Весь вывод и файлы — прислать разработчику для
+   финальной сверки имён полей под конкретную версию SDK.
+
+> Точные имена классов/полей Python-обёртки различаются между версиями SDK.
+> Интеграция изолирована в `RegulaScanner` (`armcore/scanners.py`) и опирается на
+> типичный API; перед боевым запуском её сверяют по выводу `regula_selftest.py`.
+
 ## Текущие ограничения
 
 - **Сканеры Regula 7017 и Kodak SceyeX** подключены как *каркас под реальный

@@ -47,6 +47,10 @@ class Config:
     # URL локального сервиса распознавания Regula Document Reader (Web API).
     # Пусто = SDK не подключён (используется mock или файловый OCR).
     regula_rest_url: str = ""
+    # Regula Document Reader Desktop SDK (Windows): путь к .dll и файлу лицензии.
+    # Пусто = реальный сканер не настроен (работает mock/файловый OCR).
+    regula_dll_path: str = ""
+    regula_license_path: str = ""
     # Excel-отчёты (ведутся на сервере/в корне Archive).
     report_study_name: str = "Реестр_обучение.xlsx"      # обучение (договор+акт)
     report_other_name: str = "Реестр_прочие.xlsx"        # все остальные
@@ -86,6 +90,8 @@ def load_config() -> Config:
         "ARM_SERVER_URL": "server_url",
         "ARM_OPERATOR": "operator",
         "ARM_REGULA_URL": "regula_rest_url",
+        "ARM_REGULA_DLL": "regula_dll_path",
+        "ARM_REGULA_LICENSE": "regula_license_path",
     }
     for env_key, attr in env_map.items():
         if os.environ.get(env_key):

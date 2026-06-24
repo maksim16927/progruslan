@@ -73,37 +73,59 @@ def _save_at_dpi(img: Image.Image, path: str, dpi: int = SCAN_DPI) -> str:
 #  Regula 7017 — каркас под реальный SDK
 # --------------------------------------------------------------------------- #
 class RegulaScanner(BaseScanner):
-    """Сканер паспортов Regula 7017.
+    """Сканер паспортов Regula 7017 через Regula Document Reader **Desktop SDK**.
 
-    Подключение к реальному устройству выполняется через Regula Document Reader
-    SDK (обёртка .dll через ctypes) или через REST API локального сервиса Regula.
-    Ниже — точки интеграции, помеченные TODO.
+    Desktop SDK (Windows, .dll + Python-обёртка из поставки Regula) сам управляет
+    устройством и выполняет распознавание: захват кадра (белый/УФ/ИК, 300 dpi),
+    чтение MRZ и визуальной зоны (VIZ), извлечение портрета. Программа получает
+    уже готовые поля — это и есть «зашитый модуль распознавания».
+
+    ВНИМАНИЕ: точные имена классов/полей Python-обёртки различаются между версиями
+    SDK. Здесь интеграция изолирована в одном классе и опирается на типичный API
+    (DocumentReader / recognize / Text.get_field / Graphics). Перед боевым
+    запуском сверить вызовы с версией SDK на машине заказчика, прогнав
+    ``tools/regula_selftest.py``.
     """
     name = "Regula 7017"
 
-    def __init__(self, sdk_path: Optional[str] = None, rest_url: Optional[str] = None):
-        self.sdk_path = sdk_path
-        self.rest_url = rest_url
+    def __init__(self, dll_path: Optional[str] = None,
+                 license_path: Optional[str] = None):
+        self.dll_path = dll_path
+        self.license_path = license_path
         self._sdk = None
 
+    # ------------------------------------------------------------------ SDK
     def _load_sdk(self):
         if self._sdk is not None:
             return self._sdk
-        if not self.rest_url:
-            raise ScannerError(
-                "Regula SDK не подключён. Запустите локальный сервис Regula "
-                "Document Reader (Web API) и задайте его адрес в ARM_REGULA_URL "
-                "(или regula_rest_url в arm_config.json)."
-            )
         try:
-            from regula.documentreader.webclient import DocumentReaderApi  # type: ignore
+            # Desktop-обёртка Regula Document Reader SDK.
+            from regula.documentreader.api import DocumentReader  # type: ignore
         except ImportError as e:
             raise ScannerError(
-                "Не установлен пакет regula.documentreader.webclient. "
-                "Установите его (pip install regula.documentreader.webclient)."
+                "Не найден Regula Document Reader Desktop SDK (Python-обёртка). "
+                "Установите SDK из поставки Regula (вместе с .dll) и пакет "
+                "regula.documentreader.api."
             ) from e
-        # Клиент Web API; реальная проверка доступности — при первом запросе.
-        self._sdk = DocumentReaderApi(host=self.rest_url)
+
+        license_data = None
+        if self.license_path:
+            if not os.path.exists(self.license_path):
+                raise ScannerError(f"Лицензия Regula не найдена: {self.license_path}")
+            with open(self.license_path, "rb") as fh:
+                license_data = fh.read()
+        try:
+            # Инициализация рантайма SDK с лицензией; путь к .dll задаётся
+            # переменной окружения/поставкой SDK.
+            reader = DocumentReader()
+            reader.initialize_reader(license_data) if license_data else \
+                reader.initialize_reader()
+        except Exception as e:  # noqa: BLE001
+            raise ScannerError(
+                f"Не удалось инициализировать Regula SDK: {e}. "
+                "Проверьте .dll (ARM_REGULA_DLL) и лицензию (ARM_REGULA_LICENSE)."
+            ) from e
+        self._sdk = reader
         return self._sdk
 
     def is_available(self) -> bool:
@@ -113,86 +135,100 @@ class RegulaScanner(BaseScanner):
         except ScannerError:
             return False
 
+    # -------------------------------------------------------------- захват
     def capture_passport(self, out_dir: str) -> PassportCapture:
-        api = self._load_sdk()
-        # ТЗ, п.5.1: захват и распознавание выполняет сам сервис Regula —
-        # он возвращает готовые MRZ и VIZ (зашитый модуль распознавания).
+        reader = self._load_sdk()
+        # Захват кадра с устройства Regula 7017 (белый/УФ/ИК, 300 dpi) и
+        # распознавание встроенным модулем SDK -> готовые MRZ и VIZ.
         try:
-            from regula.documentreader.webclient import (  # type: ignore
-                RecognitionRequest, Scenario, TextFieldType,
+            response = self._recognize_from_device(reader)
+        except ScannerError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ScannerError(f"Regula: ошибка захвата/распознавания: {e}") from e
+
+        mrz_text = self._field(response, "mrz_strings") or self._field(response, "mrz")
+        viz = self._extract_viz(response)
+        images = self._save_response_images(response, out_dir)
+        return PassportCapture(image_paths=images, mrz_text=mrz_text or "",
+                               viz_fields=viz)
+
+    def _recognize_from_device(self, reader):
+        """Захватить кадр с устройства и распознать.
+
+        Реализация зависит от версии Desktop SDK. Типовой путь: получить кадр
+        со сканера (reader.scan/grab) и передать в reader.recognize(...) со
+        сценарием FullProcess. Точные имена сверяются self-test'ом.
+        """
+        if not hasattr(reader, "recognize"):
+            raise ScannerError(
+                "Версия Regula SDK не поддерживает ожидаемый API recognize(); "
+                "сверьте вызовы через tools/regula_selftest.py."
             )
-        except ImportError as e:
-            raise ScannerError("regula.documentreader.webclient недоступен") from e
+        # Захват изображения с устройства (метод зависит от версии SDK).
+        if hasattr(reader, "scan"):
+            image = reader.scan()
+            return reader.recognize(image)
+        # Некоторые версии совмещают захват и распознавание в одном вызове.
+        return reader.recognize()
 
-        # Захват изображения с устройства/папки. На реальном железе сюда
-        # подставляется кадр со сканера Regula 7017; здесь читаем последний
-        # сохранённый скан, если он есть.
-        image_bytes = self._grab_image_bytes(out_dir)
-        try:
-            request = RecognitionRequest(
-                scenario=Scenario.FULL_PROCESS, images=[image_bytes]
-            )
-            response = api.process(request)
-        except Exception as e:  # noqa: BLE001 — сетевые/SDK-сбои -> понятная ошибка
-            raise ScannerError(f"Regula: ошибка распознавания: {e}") from e
-
-        mrz_text = response.text.get_field_value(TextFieldType.MRZ_STRINGS) or ""
-        viz = self._extract_viz(response, TextFieldType)
-        images = self._save_response_images(response, out_dir) or (
-            [self._dump_image(image_bytes, out_dir)] if image_bytes else []
-        )
-        return PassportCapture(image_paths=images, mrz_text=mrz_text, viz_fields=viz)
-
+    # ------------------------------------------------------------- разбор
     @staticmethod
-    def _extract_viz(response, TextFieldType) -> dict:
-        """Поля визуальной зоны (нет в MRZ) -> ключи полей GUI."""
-        def f(field_type) -> str:
-            try:
-                return response.text.get_field_value(field_type) or ""
-            except Exception:  # noqa: BLE001
+    def _field(response, name: str) -> str:
+        """Достать текстовое поле из ответа SDK по логическому имени (best-effort)."""
+        try:
+            text = getattr(response, "text", None)
+            if text is None:
                 return ""
+            getter = getattr(text, "get_field_value", None)
+            if getter:
+                return getter(name) or ""
+            return getattr(text, name, "") or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _extract_viz(self, response) -> dict:
+        """Поля визуальной зоны (нет в MRZ) -> ключи полей GUI."""
         viz = {
-            "PATRONYMIC": f(TextFieldType.MIDDLE_NAME),
-            "BIRTHPLACE": f(TextFieldType.PLACE_OF_BIRTH),
-            "DATE_ISSUE": f(TextFieldType.DATE_OF_ISSUE),
-            "ISSUED_BY": f(TextFieldType.AUTHORITY),
+            "PATRONYMIC": self._field(response, "middle_name"),
+            "BIRTHPLACE": self._field(response, "place_of_birth"),
+            "DATE_ISSUE": self._field(response, "date_of_issue"),
+            "ISSUED_BY": self._field(response, "authority"),
         }
         return {k: v for k, v in viz.items() if v}
 
-    def _grab_image_bytes(self, out_dir: str) -> Optional[bytes]:
-        """Получить байты изображения для распознавания.
-
-        TODO(железо): здесь вызывается захват кадра со сканера Regula 7017
-        (УФ/белый/ИК, 300 dpi). Пока — берём последний скан из out_dir, если есть.
-        """
-        if os.path.isdir(out_dir):
-            files = sorted(
-                f for f in os.listdir(out_dir)
-                if f.lower().endswith((".jpg", ".jpeg", ".png"))
-            )
-            if files:
-                with open(os.path.join(out_dir, files[-1]), "rb") as fh:
-                    return fh.read()
-        return None
-
     @staticmethod
     def _save_response_images(response, out_dir: str) -> List[str]:
-        """Сохранить изображения из ответа Regula (если сервис их вернул)."""
-        return []  # TODO(железо): извлечь графические поля из response при наличии
-
-    @staticmethod
-    def _dump_image(image_bytes: bytes, out_dir: str) -> str:
+        """Сохранить снимок паспорта и портрет владельца из ответа SDK."""
         os.makedirs(out_dir, exist_ok=True)
-        path = os.path.join(out_dir, "passport_00.jpg")
-        with open(path, "wb") as fh:
-            fh.write(image_bytes)
-        return path
+        saved: List[str] = []
+        graphics = getattr(response, "graphics", None)
+        # Снимок документа.
+        for attr, fname in (("document_image", "passport_00.jpg"),
+                            ("portrait", "portrait.jpg")):
+            try:
+                getter = getattr(graphics, "get_field_image", None) if graphics else None
+                data = getter(attr) if getter else None
+                if data:
+                    path = os.path.join(out_dir, fname)
+                    with open(path, "wb") as fh:
+                        fh.write(data)
+                    saved.append(path)
+            except Exception:  # noqa: BLE001 — отсутствие поля не критично
+                pass
+        return saved
 
     def scan_pages(self, out_dir: str, max_pages: Optional[int] = None) -> List[str]:
-        self._load_sdk()
-        # TODO(SDK): режим booksheet — последовательное сканирование всех страниц
-        #   паспорта при 300 dpi с сохранением в out_dir (см. ТЗ, п.3.1(3), п.5.1).
-        raise ScannerError("scan_pages: требуется реализация режима booksheet Regula")
+        reader = self._load_sdk()
+        # Режим booksheet — постранично со сканера при 300 dpi (ТЗ, п.3.1(3), 5.1).
+        if not hasattr(reader, "scan_pages"):
+            raise ScannerError(
+                "Версия Regula SDK не поддерживает постраничный захват; "
+                "сверьте вызовы через tools/regula_selftest.py."
+            )
+        os.makedirs(out_dir, exist_ok=True)
+        paths = reader.scan_pages(out_dir, max_pages)  # зависит от версии SDK
+        return list(paths)[:max_pages] if max_pages else list(paths)
 
 
 # --------------------------------------------------------------------------- #
@@ -311,7 +347,8 @@ def get_passport_scanner(cfg: Config) -> BaseScanner:
     """Сканер паспортов: Mock или Regula в зависимости от конфигурации."""
     if cfg.mock_scanners:
         return MockScanner(_mock_dir())
-    return RegulaScanner(rest_url=cfg.regula_rest_url or None)
+    return RegulaScanner(dll_path=cfg.regula_dll_path or None,
+                         license_path=cfg.regula_license_path or None)
 
 
 def get_document_scanner(cfg: Config) -> BaseScanner:
