@@ -189,6 +189,13 @@ class RegulaScanner(BaseScanner):
         "DocumentTypesCandidates": 0x08,
     }
 
+    def _clear_results(self, reader):
+        """Очистить предыдущий результат, чтобы не подтянулись старые фото/текст."""
+        try:
+            reader.ClearResults()
+        except Exception:  # noqa: BLE001
+            pass
+
     # -------------------------------------------------------------- захват
     def capture_passport(self, out_dir: str, timeout_s: int = 60) -> PassportCapture:
         """Захват с устройства: ждём, пока оператор положит паспорт и SDK обработает."""
@@ -198,6 +205,7 @@ class RegulaScanner(BaseScanner):
                 reader.Connect()
         except Exception as e:  # noqa: BLE001
             raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
+        self._clear_results(reader)  # сбросить прошлый результат — фото будет новым
         self._wait_for_result(reader, timeout_s)
         return self._collect(reader, out_dir)
 
@@ -220,6 +228,7 @@ class RegulaScanner(BaseScanner):
         reader = self._load_sdk()
         if not os.path.exists(image_path):
             raise ScannerError(f"Файл не найден: {image_path}")
+        self._clear_results(reader)  # сбросить прошлый результат
         try:
             reader.DoProcessImage(os.path.abspath(image_path))
         except Exception as e:  # noqa: BLE001
