@@ -293,19 +293,51 @@ class RegulaScanner(BaseScanner):
             pass
         return self._text(reader, "MRZ_STRINGS").replace("\r\n", "\n")
 
+    @staticmethod
+    def _to_bytes(data) -> bytes:
+        """Привести данные графики из COM (SAFEARRAY/tuple/memoryview/str) к bytes."""
+        if data is None or isinstance(data, bool):
+            return b""
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data)
+        if isinstance(data, memoryview):
+            return data.tobytes()
+        if isinstance(data, (list, tuple)):
+            try:
+                return bytes(bytearray(int(x) & 0xFF for x in data))
+            except Exception:  # noqa: BLE001
+                return b""
+        if isinstance(data, str):
+            # Иногда возвращается base64-строка.
+            import base64
+            try:
+                return base64.b64decode(data)
+            except Exception:  # noqa: BLE001
+                return data.encode("latin-1", "ignore")
+        return b""
+
+    def graphics_info(self, reader=None) -> str:
+        """Диагностика портрета: тип и размер данных, что отдаёт SDK."""
+        reader = reader or self._load_sdk()
+        try:
+            data = reader.GetReaderGraphicsBitmapByFieldType(self._GF_PORTRAIT)
+        except Exception as e:  # noqa: BLE001
+            return f"ошибка вызова GetReaderGraphicsBitmapByFieldType: {e}"
+        raw = self._to_bytes(data)
+        return f"тип={type(data).__name__}, байт={len(raw)}"
+
     def _save_images(self, reader, out_dir: str) -> List[str]:
         """Сохранить портрет владельца из результата SDK."""
         os.makedirs(out_dir, exist_ok=True)
         saved: List[str] = []
         try:
             data = reader.GetReaderGraphicsBitmapByFieldType(self._GF_PORTRAIT)
-            if data is not None and not isinstance(data, bool):
-                raw = bytes(data)
-                if raw:
-                    path = os.path.join(out_dir, "portrait.jpg")
-                    with open(path, "wb") as fh:
-                        fh.write(raw)
-                    saved.append(path)
+            raw = self._to_bytes(data)
+            if raw:
+                path = os.path.join(out_dir, "portrait.jpg")
+                with open(path, "wb") as fh:
+                    fh.write(raw)
+                saved.append(path)
         except Exception:  # noqa: BLE001 — портрет может отсутствовать
             pass
         return saved

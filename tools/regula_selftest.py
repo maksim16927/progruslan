@@ -87,6 +87,12 @@ def main(argv) -> int:
     if not cap.image_paths:
         print("  (нет — портрет не получен)")
 
+    _hr("3a. Диагностика портрета (графики)")
+    try:
+        print(" ", scanner.graphics_info())
+    except Exception as e:  # noqa: BLE001
+        print("  ошибка:", e)
+
     _hr("3b. ВСЕ текстовые поля, которые отдал SDK (диагностика)")
     try:
         all_fields = scanner.dump_text_fields()
