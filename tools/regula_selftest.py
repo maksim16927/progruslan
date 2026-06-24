@@ -80,6 +80,10 @@ def main(argv) -> int:
     if capture_error:
         lines.append(f"CAPTURE_ERROR: {capture_error}")
     try:
+        lines.append(f"FLAGS_DIAG: {scanner.flags_info()}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"FLAGS_DIAG: ошибка: {e}")
+    try:
         lines.append(f"RESULT_TYPES: {scanner.diagnostics()}")
     except Exception as e:  # noqa: BLE001
         lines.append(f"RESULT_TYPES: ошибка: {e}")

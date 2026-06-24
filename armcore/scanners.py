@@ -155,6 +155,7 @@ class RegulaScanner(BaseScanner):
         #   DoGraphics   — портрет/графика; DoLocateDocument/DoDocumentType —
         #   локализация и определение типа; DoReceiveImages — получать снимки.
         for prop, val in (
+            ("OptionsEnabled", True),   # без этого записи свойств могут игнорироваться
             ("DoMRZOCR", True),
             ("DoVisualOCR", True),
             ("DoOCRAnalize", True),
@@ -275,6 +276,19 @@ class RegulaScanner(BaseScanner):
                     return
                 except Exception:  # noqa: BLE001
                     continue
+
+    def flags_info(self, reader=None) -> dict:
+        """Прочитать обратно флаги обработки — применились ли наши настройки."""
+        reader = reader or self._load_sdk()
+        out = {}
+        for prop in ("OptionsEnabled", "DoMRZOCR", "DoVisualOCR", "DoOCRAnalize",
+                     "DoGraphics", "DoLocateDocument", "DoDocumentType",
+                     "DoReceiveImages", "AutoScan", "InBackground"):
+            try:
+                out[prop] = getattr(reader, prop)
+            except Exception as e:  # noqa: BLE001
+                out[prop] = f"err: {e}"
+        return out
 
     def lexical_xml(self, reader=None) -> str:
         """XML результата OCRLexicalAnalyze (там лежат распознанные поля)."""
