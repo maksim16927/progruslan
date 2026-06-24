@@ -226,38 +226,49 @@ class RegulaScanner(BaseScanner):
             raise ScannerError(f"Regula: ошибка DoProcessImage: {e}") from e
         return self._collect(reader, out_dir)
 
-    def _result_ready(self, reader) -> bool:
-        """Готов ли результат: есть РЕАЛЬНЫЕ данные (MRZ или распознанные поля).
-
-        Не полагаемся только на «тип результата доступен» — он бывает =1, но с
-        пустым fieldList (распознавание ещё не завершено). Ждём настоящие данные.
-        """
-        if self._mrz(reader):
-            return True
+    def _full_result_ready(self, reader) -> bool:
+        """Полный результат: есть белый снимок (Graphics) ИЛИ распознанные поля."""
+        try:
+            if int(reader.IsReaderResultTypeAvailable(0x06)) > 0:  # Graphics/портрет
+                return True
+        except Exception:  # noqa: BLE001
+            pass
         if self._lexical_fields(reader):
             return True
         return False
 
-    def _wait_for_result(self, reader, timeout_s: int):
-        """Ждать появления результата (документ положен и обработан)."""
+    def _wait_for_result(self, reader, timeout_s: int, grace_after_mrz_s: float = 10.0):
+        """Ждать ПОЛНЫЙ результат (белый снимок + визуальные поля), не только MRZ.
+
+        MRZ появляется быстро (ИК-чтение), но визуальная OCR и портрет приходят
+        позже. Поэтому, увидев MRZ, не останавливаемся сразу — даём время на
+        полную обработку (grace_after_mrz_s). MRZ-only — лишь запасной вариант.
+        """
         import time
         try:
             import pythoncom  # type: ignore
         except ImportError:
             pythoncom = None
         deadline = time.monotonic() + timeout_s
+        mrz_seen_at = None
         while time.monotonic() < deadline:
             if pythoncom is not None:
                 pythoncom.PumpWaitingMessages()  # прокачать COM-события
-            if self._result_ready(reader):
-                return
+            if self._full_result_ready(reader):
+                return  # полный результат — лучший случай
+            if self._mrz(reader):
+                if mrz_seen_at is None:
+                    mrz_seen_at = time.monotonic()
+                elif time.monotonic() - mrz_seen_at >= grace_after_mrz_s:
+                    return  # полного нет, но MRZ есть — работаем по MRZ
             time.sleep(0.3)
-        # Диагностика — что реально доступно у ридера на момент таймаута.
+        # Таймаут: если хоть что-то распозналось — продолжаем, иначе ошибка.
+        if self._mrz(reader) or self._lexical_fields(reader):
+            return
         diag = self.diagnostics(reader)
         raise ScannerError(
             "Regula: не дождались результата распознавания за "
-            f"{timeout_s} c. Диагностика результата: {diag}. "
-            "Подсветка моргает — значит захват есть; пришлите эту строку разработчику."
+            f"{timeout_s} c. Диагностика: {diag}. Пришлите эту строку разработчику."
         )
 
     # ------------------------------------------------------------- разбор
