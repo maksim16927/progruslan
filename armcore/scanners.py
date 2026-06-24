@@ -148,9 +148,23 @@ class RegulaScanner(BaseScanner):
                 "Проверьте, что Regula SDK установлен и зарегистрирован "
                 "(regsvr32), а сканер подключён."
             ) from e
-        # Включаем распознавание MRZ и графики (портрет).
-        for prop, val in (("DoMRZOCR", True), ("DoGraphics", True),
-                          ("InBackground", False)):
+        # Включаем ПОЛНУЮ обработку документа (как в C#-примере поставки SDK):
+        #   DoVisualOCR  — чтение визуальной зоны (отчество, место рождения,
+        #                  дата выдачи, орган) — без него fieldList пустой;
+        #   DoOCRAnalize — лексический анализ распознанного текста;
+        #   DoGraphics   — портрет/графика; DoLocateDocument/DoDocumentType —
+        #   локализация и определение типа; DoReceiveImages — получать снимки.
+        for prop, val in (
+            ("DoMRZOCR", True),
+            ("DoVisualOCR", True),
+            ("DoOCRAnalize", True),
+            ("DoGraphics", True),
+            ("DoLocateDocument", True),
+            ("DoDocumentType", True),
+            ("DoReceiveImages", True),
+            ("DoReceiveAllScannedImages", True),
+            ("InBackground", False),
+        ):
             try:
                 setattr(reader, prop, val)
             except Exception:  # noqa: BLE001 — свойство может называться иначе
