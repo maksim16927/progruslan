@@ -134,6 +134,12 @@ def main(argv) -> int:
     lines.append(f"VIZ: {cap.viz_fields}")
     lines.append(f"IMAGES: {cap.image_paths}")
     lines.append(f"OUT_DIR: {out_dir}")
+    try:
+        xml = scanner.lexical_xml()
+        lines.append("--- OCRLexicalAnalyze XML (первые 4000 симв.) ---")
+        lines.append(xml[:4000] if xml else "(пусто)")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"LEXICAL_XML ошибка: {e}")
 
     os.makedirs(out_dir, exist_ok=True)
     diag_path = os.path.join(out_dir, "diag.txt")

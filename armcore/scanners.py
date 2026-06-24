@@ -212,8 +212,8 @@ class RegulaScanner(BaseScanner):
         return self._collect(reader, out_dir)
 
     def _result_ready(self, reader) -> bool:
-        """Готов ли результат: по доступности Text/Graphics или по непустым полям."""
-        for code in (self._RESULT_TYPE_TEXT, 0x06):  # Text, Graphics
+        """Готов ли результат: Text/OCRLexical/Graphics доступны или поля непусты."""
+        for code in (self._RESULT_TYPE_TEXT, 0x25, 0x06):  # Text, OCRLexical, Graphics
             try:
                 if int(reader.IsReaderResultTypeAvailable(code)) > 0:
                     return True
@@ -248,14 +248,32 @@ class RegulaScanner(BaseScanner):
 
     # ------------------------------------------------------------- разбор
     def _select_text_result(self, reader):
-        """Выбрать текстовый результат перед чтением полей (как для графики)."""
-        for code in (self._RESULT_TYPE_TEXT, 0x25):  # Text, OCRLexicalAnalyze
+        """Выбрать ДОСТУПНЫЙ текстовый результат (предпочтительно OCRLexicalAnalyze)."""
+        # Выбираем тот тип, который реально доступен (0x25 несёт распознанные поля).
+        for code in (0x25, self._RESULT_TYPE_TEXT):  # OCRLexicalAnalyze, Text
+            try:
+                if int(reader.IsReaderResultTypeAvailable(code)) <= 0:
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
             for args in ((code, 0, 0, ""), (code, 0, 0)):
                 try:
                     reader.CheckReaderResult(*args)
                     return
                 except Exception:  # noqa: BLE001
                     continue
+
+    def lexical_xml(self, reader=None) -> str:
+        """XML результата OCRLexicalAnalyze (там лежат распознанные поля)."""
+        reader = reader or self._load_sdk()
+        for args in ((0x25, 0, 0), (0x25, 0)):
+            try:
+                xml = reader.CheckReaderResultXML(*args)
+                if xml:
+                    return str(xml)
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
 
     def _collect(self, reader, out_dir: str) -> PassportCapture:
         """Собрать MRZ, VIZ и изображения из текущего результата SDK."""
