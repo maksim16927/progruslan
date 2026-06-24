@@ -141,6 +141,10 @@ class MainWindow(QWidget):
         self.guard_folder: str | None = None
         self.pending_passport_scans: list[str] = []
         self.last_pdf_path: str | None = None
+        # Кэш состояния сканера (проверяется при старте и после считывания),
+        # чтобы не дёргать SDK на каждый апдейт статус-бара.
+        self._scanner_ok: bool | None = None
+        self._refresh_scanner_state()
 
         self.setWindowTitle("🏛️ АРМ Оператора — Sokrat Helper 🏛️")
         self.resize(1080, 1000)
@@ -344,6 +348,7 @@ class MainWindow(QWidget):
         row2.setSpacing(12)
         for text, slot, style in [
             ("📑 Сканировать документ (Kodak)", self.on_scan_document, S_BTN_ALT),
+            ("📄 Открыть PDF", self.on_open_pdf, S_BTN_ALT),
             ("🖨️ Печать последнего PDF", self.on_print_pdf, S_BTN_ALT),
             ("📂 Открыть папку клиента", self.on_open_folder, S_BTN_ALT),
         ]:
@@ -386,6 +391,16 @@ class MainWindow(QWidget):
         if fio:
             self.passport_fields["FIO"].setText(fio)
 
+    def _refresh_scanner_state(self):
+        """Пересчитать состояние сканера (в режиме оборудования). Безопасно."""
+        if self.cfg.mock_scanners:
+            self._scanner_ok = None
+            return
+        try:
+            self._scanner_ok = bool(self.passport_scanner.is_available())
+        except Exception:  # noqa: BLE001 — статус не должен ронять программу
+            self._scanner_ok = False
+
     def _update_status(self, extra: str = ""):
         server_state = "?"
         try:
@@ -393,11 +408,16 @@ class MainWindow(QWidget):
             server_state = "онлайн"
         except ServerUnavailable:
             server_state = "офлайн (локальные блокировки)"
-        scan_mode = "MOCK" if self.cfg.mock_scanners else "оборудование"
+        if self.cfg.mock_scanners:
+            scan_mode = "Сканеры: MOCK"
+        elif self._scanner_ok:
+            scan_mode = "Сканер: подключён ✓"
+        else:
+            scan_mode = "Сканер: не найден ✗"
         lock = f" • блокировка: {self.guard_folder}" if self.guard_folder else ""
         self.status_label.setText(
             f"Оператор: {self.cfg.operator} • АРМ: {self.cfg.workstation} • "
-            f"Сервер: {server_state} • Сканеры: {scan_mode} • Archive: {self.cfg.archive_root}"
+            f"Сервер: {server_state} • {scan_mode} • Archive: {self.cfg.archive_root}"
             f"{lock}{(' • ' + extra) if extra else ''}"
         )
 
@@ -467,8 +487,11 @@ class MainWindow(QWidget):
             tmp = tempfile.mkdtemp(prefix="arm_passport_")
             cap = self.passport_scanner.capture_passport(tmp)
         except scanners.ScannerError as e:
+            self._scanner_ok = False
+            self._update_status()
             QMessageBox.critical(self, "Сканер недоступен", str(e))
             return
+        self._scanner_ok = True
         self.pending_passport_scans = list(cap.image_paths)
         if cap.mrz_text:
             self.mrz_entry.setPlainText(cap.mrz_text)
@@ -746,6 +769,20 @@ class MainWindow(QWidget):
         self.last_pdf_path = out
         QMessageBox.information(self, "Готово",
                                f"Документ отсканирован ({len(pages)} стр.):\n{out}")
+
+    def on_open_pdf(self):
+        """Открыть (просмотреть) PDF: последний созданный или выбрать из папки клиента."""
+        if self.last_pdf_path and os.path.exists(self.last_pdf_path):
+            winio_open_folder(self.last_pdf_path)
+            return
+        # Последнего PDF нет — предложить выбрать файл из папки клиента.
+        fio = self.passport_fields["FIO"].text().strip()
+        start = storage.find_client_folder(self.cfg.archive_root, fio) if fio else None
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите PDF", start or "", "PDF (*.pdf);;Все файлы (*)")
+        if path:
+            self.last_pdf_path = path
+            winio_open_folder(path)
 
     def on_print_pdf(self):
         if not self.last_pdf_path or not os.path.exists(self.last_pdf_path):
