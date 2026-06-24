@@ -158,8 +158,16 @@ def parse(mrz_text: str) -> Optional[MrzResult]:
     if not mrz_text:
         return None
     lines = [ln.strip().replace(" ", "") for ln in mrz_text.strip().splitlines() if ln.strip()]
+    # Строка TD3 — ровно 44 символа. Иногда OCR добавляет лишний '<' в начале
+    # (строка становится 45+), что сдвигает все поля. Убираем ведущие '<' у
+    # переразмеренных строк, чтобы выравнивание восстановилось.
+    norm = []
+    for ln in lines:
+        while len(ln) > 44 and ln.startswith("<"):
+            ln = ln[1:]
+        norm.append(ln)
     # Берём две последние «длинные» строки — это и есть MRZ.
-    candidates = [ln for ln in lines if len(ln) >= 30]
+    candidates = [ln for ln in norm if len(ln) >= 30]
     if len(candidates) >= 2:
         return parse_td3(candidates[-2], candidates[-1])
     return None
