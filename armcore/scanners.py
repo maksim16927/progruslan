@@ -767,115 +767,108 @@ class RegulaScanner(BaseScanner):
 class KodakScanner(BaseScanner):
     """Сканер документов (Kodak SceyeX и др.) — многостраничные сшитые документы.
 
-    Использует **WIA** (Windows Image Acquisition) через pywin32 — встроено в
-    Windows, отдельные TWAIN-DLL не требуются. Открывает стандартный диалог
-    сканирования; работает с большинством сканеров документов.
+    Использует **TWAIN** через пакет ``pytwain`` (импортируется как ``twain``).
+    Ставить именно ``pip install pytwain`` — он включает нужную ``TWAINDSM.dll``,
+    поэтому отдельно качать DLL не надо. Работает с TWAIN-сканерами, в т.ч. с
+    теми, что не видны через WIA.
     """
-    name = "Сканер документов (WIA)"
+    name = "Сканер документов (TWAIN)"
 
     def __init__(self, device_name: Optional[str] = None):
         self.device_name = device_name
 
-    def _wia_dialog(self):
-        """Создать объект WIA.CommonDialog (встроен в Windows). Вернуть его."""
+    def _open_twain(self):
+        """Загрузить модуль twain (pytwain, только Windows). Вернуть модуль."""
         try:
-            import win32com.client  # type: ignore  (pywin32, только Windows)
+            import twain  # type: ignore  (pip install pytwain)
         except ImportError as e:
             raise ScannerError(
-                "Не установлен pywin32 (win32com) — нужен для сканирования "
-                "документов через WIA. Установите: pip install pywin32."
+                "Не установлен пакет pytwain (pip install pytwain) — нужен для "
+                "сканера документов по TWAIN. Он включает TWAINDSM.dll."
             ) from e
-        try:
-            return win32com.client.Dispatch("WIA.CommonDialog")
-        except Exception as e:  # noqa: BLE001
-            raise ScannerError(f"WIA недоступен: {e}") from e
+        return twain
 
     def is_available(self) -> bool:
         try:
-            self._wia_dialog()
+            self._open_twain()
             return True
         except ScannerError:
             return False
 
-    def list_wia_devices(self) -> list:
-        """Список WIA-устройств (имя, тип) — видит ли Windows сканер через WIA."""
-        try:
-            import win32com.client  # type: ignore
-            mgr = win32com.client.Dispatch("WIA.DeviceManager")
-        except Exception as e:  # noqa: BLE001
-            return [f"WIA.DeviceManager недоступен: {e}"]
-        out = []
-        try:
-            infos = mgr.DeviceInfos
-            for i in range(1, int(infos.Count) + 1):
-                info = infos.Item(i)
-                try:
-                    name = info.Properties("Name").Value
-                except Exception:  # noqa: BLE001
-                    name = "?"
-                out.append(f"{name} (type={getattr(info, 'Type', '?')})")
-        except Exception as e:  # noqa: BLE001
-            out.append(f"ошибка перечисления: {e}")
-        return out
-
-    def scan_document(self, out_dir: str) -> List[str]:
-        """Отсканировать документ через WIA (встроено в Windows, без доп. DLL).
-
-        Открывает стандартный диалог сканирования. Можно отсканировать несколько
-        страниц подряд — после каждой диалог появляется снова; нажмите «Отмена»,
-        когда страницы закончились. Каждая страница сохраняется как jpg (цвет).
-        """
-        dialog = self._wia_dialog()
+    def scan_document(self, out_dir: str, show_ui: bool = True) -> List[str]:
+        """Отсканировать документ через TWAIN. Возвращает пути страниц (jpg)."""
+        twain = self._open_twain()
         os.makedirs(out_dir, exist_ok=True)
-
-        # Проверим, видит ли WIA хоть один сканер — иначе понятная ошибка.
-        devices = self.list_wia_devices()
-        if not devices:
-            raise ScannerError(
-                "WIA не видит ни одного сканера. Возможно, сканер работает только "
-                "по TWAIN. Подключите/включите WIA-совместимый сканер или скажите "
-                "разработчику — вернём TWAIN."
-            )
-
         paths: List[str] = []
-        idx = 0
-        while True:
+        sm = None
+        src = None
+        try:
             try:
-                img = dialog.ShowAcquireImage()  # стандартный диалог сканера
-            except Exception as e:  # noqa: BLE001 — отмена ИЛИ реальная ошибка
-                # На первой странице покажем реальную причину, дальше — это «Отмена».
-                if idx == 0:
-                    raise ScannerError(
-                        f"WIA: не удалось отсканировать. Видимые устройства: "
-                        f"{devices}. Ошибка: {e}"
-                    ) from e
-                break
-            if img is None:
-                break
-            ext = (getattr(img, "FileExtension", "") or "jpg").lstrip(".") or "jpg"
-            tmp_path = os.path.join(out_dir, f"_doc_{idx:02d}.{ext}")
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            try:
-                img.SaveFile(tmp_path)
+                sm = twain.SourceManager(0)
             except Exception as e:  # noqa: BLE001
-                raise ScannerError(f"WIA: не удалось сохранить страницу: {e}") from e
-            # Перегнать в jpg (цвет, 300 dpi) для единообразия и сборки в PDF.
-            jpg_path = os.path.join(out_dir, f"doc_{idx:02d}.jpg")
-            try:
-                _save_at_dpi(Image.open(tmp_path), jpg_path, self.dpi)
-                if tmp_path != jpg_path and os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-                paths.append(jpg_path)
-            except Exception:  # noqa: BLE001 — оставить как есть, если конвертация не вышла
-                paths.append(tmp_path)
-            idx += 1
+                raise ScannerError(
+                    f"TWAIN: не удалось запустить менеджер источников (DSM): {e}. "
+                    "Проверьте установку pytwain (pip install pytwain)."
+                ) from e
+            src = (sm.open_source(self.device_name) if self.device_name
+                   else sm.open_source())
+            if src is None:
+                raise ScannerError("TWAIN: сканер документов не выбран/не найден.")
+            for cap, ctype, val in (
+                ("ICAP_PIXELTYPE", "TWTY_UINT16", "TWPT_RGB"),
+                ("ICAP_XRESOLUTION", "TWTY_FIX32", float(self.dpi)),
+                ("ICAP_YRESOLUTION", "TWTY_FIX32", float(self.dpi)),
+            ):
+                try:
+                    capc = getattr(twain, cap)
+                    typ = getattr(twain, ctype)
+                    v = getattr(twain, val) if isinstance(val, str) else val
+                    src.set_capability(capc, typ, v)
+                except Exception:  # noqa: BLE001 — не все сканеры всё поддерживают
+                    pass
 
+            src.request_acquire(show_ui=show_ui, modal_ui=show_ui)
+            idx = 0
+            while True:
+                try:
+                    rv = src.xfer_image_natively()
+                except Exception:  # noqa: BLE001 — страниц больше нет / отмена
+                    break
+                if not rv:
+                    break
+                handle = rv[0] if isinstance(rv, tuple) else rv
+                bmp_path = os.path.join(out_dir, f"_doc_{idx:02d}.bmp")
+                try:
+                    twain.dib_to_bm_file(handle, bmp_path)
+                finally:
+                    try:
+                        twain.global_handle_free(handle)
+                    except Exception:  # noqa: BLE001
+                        pass
+                jpg_path = os.path.join(out_dir, f"doc_{idx:02d}.jpg")
+                try:
+                    _save_at_dpi(Image.open(bmp_path), jpg_path, self.dpi)
+                    os.remove(bmp_path)
+                    paths.append(jpg_path)
+                except Exception:  # noqa: BLE001
+                    paths.append(bmp_path)
+                idx += 1
+                more = rv[1] if isinstance(rv, tuple) and len(rv) > 1 else 0
+                if not more:
+                    break
+        except ScannerError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ScannerError(f"TWAIN: ошибка сканирования документа: {e}") from e
+        finally:
+            for obj in (src, sm):
+                try:
+                    if obj is not None:
+                        obj.destroy()
+                except Exception:  # noqa: BLE001
+                    pass
         if not paths:
-            raise ScannerError(
-                "WIA: ни одной страницы не получено (сканирование отменено "
-                "или сканер недоступен)."
-            )
+            raise ScannerError("TWAIN: не получено ни одной страницы (отмена/нет сканера).")
         return paths
 
 
