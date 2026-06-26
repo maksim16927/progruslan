@@ -767,74 +767,63 @@ class RegulaScanner(BaseScanner):
 class KodakScanner(BaseScanner):
     """Сканер документов (Kodak SceyeX и др.) — многостраничные сшитые документы.
 
-    Драйверы TWAIN сканеров документов (Kodak SceyeX и др.) обычно 32-битные и
-    не видны из 64-битного Python (а PyQt6 не ставится под 32-бит). Поэтому
-    сканирование вынесено в отдельный 32-битный помощник ``tools/twain_scan.py``,
-    который запускается через ``py -3-32``. Основная программа остаётся 64-битной,
-    а помощнику нужен только пакет ``pytwain``.
+    Сканирование идёт через **NAPS2** (бесплатная программа, naps2.com) и её
+    консоль ``NAPS2.Console.exe``. NAPS2 надёжно работает с TWAIN-драйверами,
+    в т.ч. 32-битными (через собственный worker), и сам выдаёт изображения —
+    не нужен ни 32-битный Python, ни ручная возня с TWAIN-состояниями.
+
+    Настройка: установить NAPS2; в его окне создать **профиль** для сканера
+    (TWAIN, цвет, 300 dpi) и задать имя профиля в ``ARM_NAPS2_PROFILE``
+    (по умолчанию ``kodak``). Путь к NAPS2.Console.exe — авто или ``ARM_NAPS2``.
     """
-    name = "Сканер документов (TWAIN, 32-bit helper)"
+    name = "Сканер документов (NAPS2)"
 
     def __init__(self, device_name: Optional[str] = None):
         self.device_name = device_name
 
     @staticmethod
-    def _py32_cmd() -> list:
-        """Команда запуска 32-битного Python: ARM_PY32 -> py -3-32."""
-        exe = os.environ.get("ARM_PY32")
-        if exe:
-            return [exe]
-        return ["py", "-3-32"]
-
-    @staticmethod
-    def _helper_path() -> str:
-        here = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(os.path.dirname(here), "tools", "twain_scan.py")
+    def _naps2_exe() -> Optional[str]:
+        """Найти NAPS2.Console.exe: env ARM_NAPS2 -> стандартные пути."""
+        env = os.environ.get("ARM_NAPS2")
+        if env and os.path.exists(env):
+            return env
+        for base in (r"C:\Program Files\NAPS2", r"C:\Program Files (x86)\NAPS2"):
+            exe = os.path.join(base, "NAPS2.Console.exe")
+            if os.path.exists(exe):
+                return exe
+        return None
 
     def is_available(self) -> bool:
-        # Реальная доступность проверяется при запуске помощника; здесь — мягко.
-        return True
+        return self._naps2_exe() is not None
 
     def scan_document(self, out_dir: str) -> List[str]:
-        """Отсканировать документ 32-битным помощником TWAIN. Вернуть пути jpg."""
+        """Отсканировать документ через NAPS2.Console. Вернуть пути страниц (jpg)."""
         import subprocess
         os.makedirs(out_dir, exist_ok=True)
-        helper = self._helper_path()
-        if not os.path.exists(helper):
-            raise ScannerError(f"Не найден помощник сканирования: {helper}")
+        exe = self._naps2_exe()
+        if not exe:
+            raise ScannerError(
+                "Не найден NAPS2.Console.exe. Установите NAPS2 (naps2.com) или "
+                "задайте путь к NAPS2.Console.exe в переменной ARM_NAPS2."
+            )
 
-        cmd = self._py32_cmd() + [helper, out_dir]
+        profile = os.environ.get("ARM_NAPS2_PROFILE", "kodak")
+        # Шаблон вывода: NAPS2 заменит $(n) на номер страницы -> doc1.jpg, doc2.jpg
+        out_tpl = os.path.join(out_dir, "doc$(n).jpg")
+        cmd = [exe, "-o", out_tpl, "-p", profile, "--force"]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        except FileNotFoundError as e:
-            raise ScannerError(
-                "Не найден 32-битный Python (py -3-32). Установите 32-битный Python "
-                "и pytwain (см. Установка32.bat), либо задайте путь в ARM_PY32."
-            ) from e
         except subprocess.TimeoutExpired as e:
-            raise ScannerError("TWAIN: сканирование заняло слишком долго (таймаут).") from e
+            raise ScannerError("NAPS2: сканирование заняло слишком долго (таймаут).") from e
 
-        output = (proc.stdout or "") + (proc.stderr or "")
-        if "ERROR:" in output:
-            msg = output[output.find("ERROR:"):].strip().splitlines()[0]
-            raise ScannerError(f"Сканер документов: {msg}")
-
-        # Собрать страницы (помощник сохраняет doc_NN.bmp) и перегнать в jpg.
         import glob
-        bmps = sorted(glob.glob(os.path.join(out_dir, "doc_*.bmp")))
-        paths: List[str] = []
-        for bmp in bmps:
-            jpg = os.path.splitext(bmp)[0] + ".jpg"
-            try:
-                _save_at_dpi(Image.open(bmp), jpg, self.dpi)
-                os.remove(bmp)
-                paths.append(jpg)
-            except Exception:  # noqa: BLE001
-                paths.append(bmp)
+        paths = sorted(glob.glob(os.path.join(out_dir, "doc*.jpg")))
         if not paths:
+            output = ((proc.stdout or "") + (proc.stderr or "")).strip()
             raise ScannerError(
-                "Сканер документов: ни одной страницы не получено "
-                f"(отмена или сканер недоступен). Вывод: {output.strip()[:300]}"
+                "NAPS2: страниц не получено. Проверьте, что создан профиль "
+                f"«{profile}» (NAPS2 -> Профили) для вашего сканера. "
+                f"Вывод NAPS2: {output[:300] or '(пусто)'}"
             )
         return paths
 
