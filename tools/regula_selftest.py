@@ -101,6 +101,10 @@ def main(argv) -> int:
     except Exception as e:  # noqa: BLE001
         lines.append(f"PORTRAIT_DIAG: ошибка: {e}")
     try:
+        lines.append(f"IMAGES_DIAG: {scanner.images_info()}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"IMAGES_DIAG: ошибка: {e}")
+    try:
         fields = scanner.dump_text_fields()
         lines.append(f"FIELDS_DIAG: {fields if fields else '(пусто)'}")
     except Exception as e:  # noqa: BLE001

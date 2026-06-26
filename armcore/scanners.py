@@ -571,6 +571,35 @@ class RegulaScanner(BaseScanner):
                 continue
         return b""
 
+    def images_info(self, reader=None) -> dict:
+        """Размеры снимков по методам/свету — диагностика полной страницы."""
+        reader = reader or self._load_sdk()
+        for args in ((0x01, 0, 0, ""), (0x01, 0, 0)):
+            try:
+                reader.CheckReaderResult(*args)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        out = {}
+        for light in (0x06, 0x02, 0x04):
+            for getter in ("GetReaderBitmapImageByLightIndex",
+                           "GetReaderEOSBitmapImageByLightIndex"):
+                fn = getattr(reader, getter, None)
+                if fn is None:
+                    continue
+                try:
+                    out[f"{getter}({light})"] = len(self._to_bytes(fn(light)))
+                except Exception as e:  # noqa: BLE001
+                    out[f"{getter}({light})"] = f"err"
+        for idx in range(0, 3):
+            fn = getattr(reader, "GetReaderBitmapImage", None)
+            if fn is not None:
+                try:
+                    out[f"GetReaderBitmapImage({idx})"] = len(self._to_bytes(fn(idx)))
+                except Exception:  # noqa: BLE001
+                    out[f"GetReaderBitmapImage({idx})"] = "err"
+        return out
+
     def graphics_info(self, reader=None) -> str:
         """Диагностика портрета: тип и размер данных, что отдаёт SDK."""
         reader = reader or self._load_sdk()
@@ -589,29 +618,51 @@ class RegulaScanner(BaseScanner):
         return "; ".join(out)
 
     def _raw_image_bytes(self, reader) -> bytes:
-        """Сырой снимок документа (белый свет) — если портрет недоступен."""
-        # Пробуем выбрать результат сырого изображения и взять кадр.
+        """Полный снимок страницы паспорта (белый свет).
+
+        Собираем кандидатов разными методами/источниками света и берём САМЫЙ
+        большой кадр — это и есть полная страница (а не вырезка).
+        """
+        # Выбрать результат сырого изображения.
         for args in ((0x01, 0, 0, ""), (0x01, 0, 0)):  # RawImage
             try:
                 reader.CheckReaderResult(*args)
                 break
             except Exception:  # noqa: BLE001
                 continue
-        for getter, args in (
-            ("GetReaderEOSBitmapImageByLightIndex", (0,)),
-            ("GetReaderImageByLightIndex", (0,)),
-            ("GetReaderImage", (0, 0)),
-        ):
-            try:
+
+        WHITE = (0x06, 0x02, 0x04, 0x00000006)  # White_Full / White_Top / White_Side
+        candidates: list = []
+
+        # По источнику света (белый) — полная страница.
+        for light in WHITE:
+            for getter in ("GetReaderBitmapImageByLightIndex",
+                           "GetReaderEOSBitmapImageByLightIndex"):
                 fn = getattr(reader, getter, None)
                 if fn is None:
                     continue
-                raw = self._to_bytes(fn(*args))
-                if raw:
-                    return raw
-            except Exception:  # noqa: BLE001
-                continue
-        return b""
+                try:
+                    raw = self._to_bytes(fn(light))
+                    if raw:
+                        candidates.append(raw)
+                except Exception:  # noqa: BLE001
+                    continue
+        # По индексу кадра.
+        for idx in range(0, 4):
+            for getter in ("GetReaderBitmapImage", "GetReaderEOSBitmapImage"):
+                fn = getattr(reader, getter, None)
+                if fn is None:
+                    continue
+                try:
+                    raw = self._to_bytes(fn(idx))
+                    if raw:
+                        candidates.append(raw)
+                except Exception:  # noqa: BLE001
+                    continue
+
+        if not candidates:
+            return b""
+        return max(candidates, key=len)  # самый большой = полная страница
 
     def _save_images(self, reader, out_dir: str) -> List[str]:
         """Сохранить ПОЛНЫЙ скан паспорта (без вырезки лица).
