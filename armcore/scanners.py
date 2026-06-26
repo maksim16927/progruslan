@@ -675,10 +675,25 @@ class RegulaScanner(BaseScanner):
                     pass
 
         if eos:
-            return max(eos, key=len)          # полный кадр — верх не срезан
+            # Полный кадр сенсора приходит перевёрнутым — разворачиваем на 180°.
+            return self._rotate180(max(eos, key=len))
         if cropped:
             return max(cropped, key=len)
         return b""
+
+    @staticmethod
+    def _rotate180(raw: bytes) -> bytes:
+        """Развернуть JPEG-кадр на 180° (полный кадр сенсора приходит перевёрнутым)."""
+        if not raw:
+            return raw
+        try:
+            from io import BytesIO
+            img = Image.open(BytesIO(raw)).rotate(180, expand=True).convert("RGB")
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=92)
+            return buf.getvalue()
+        except Exception:  # noqa: BLE001 — не вышло развернуть, отдаём как есть
+            return raw
 
     def _save_images(self, reader, out_dir: str) -> List[str]:
         """Сохранить ПОЛНЫЙ скан паспорта (без вырезки лица).
