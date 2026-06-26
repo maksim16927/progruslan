@@ -109,6 +109,11 @@ def main(argv) -> int:
         lines.append(f"FIELDS_DIAG: {fields if fields else '(пусто)'}")
     except Exception as e:  # noqa: BLE001
         lines.append(f"FIELDS_DIAG: ошибка: {e}")
+    try:
+        allc = scanner.dump_all_codes()
+        lines.append(f"ALL_CODES: {allc if allc else '(пусто)'}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"ALL_CODES: ошибка: {e}")
     lines.append("MRZ: " + (repr(cap.mrz_text) if cap else "(нет захвата)"))
     lines.append("VIZ: " + (str(cap.viz_fields) if cap else "(нет захвата)"))
     lines.append("IMAGES: " + (str(cap.image_paths) if cap else "(нет захвата)"))

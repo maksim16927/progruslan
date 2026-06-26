@@ -464,6 +464,26 @@ class RegulaScanner(BaseScanner):
                 out[name] = val
         return out
 
+    def dump_all_codes(self, reader=None) -> dict:
+        """Перебрать коды полей 0x01..0xB0 и вернуть все непустые значения.
+
+        Диагностика: показывает ВСЁ, что распознал сканер, с кодами полей —
+        чтобы найти, под какими кодами лежат дата выдачи, отчество, место
+        рождения, адрес, орган.
+        """
+        reader = reader or self._load_sdk()
+        self._select_text_result(reader)
+        out = {}
+        for code in range(0x01, 0xB1):
+            try:
+                val = reader.GetTextFieldByType(code)
+                val = str(val).strip() if val is not None else ""
+            except Exception:  # noqa: BLE001
+                val = ""
+            if val:
+                out[hex(code)] = val
+        return out
+
     def _mrz(self, reader) -> str:
         """MRZ-строки: сначала GetMRZLines(), иначе поле ft_MRZ_Strings."""
         try:
