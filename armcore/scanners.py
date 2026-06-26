@@ -178,6 +178,8 @@ class RegulaScanner(BaseScanner):
             ("DoDocumentType", True),
             ("DoReceiveImages", True),
             ("DoReceiveAllScannedImages", True),
+            ("RotateResultImages", True),        # выровнять кадр вертикально
+            ("DoChangeOrientationByFace", True), # ориентация по лицу
             ("InBackground", False),
         ):
             try:
