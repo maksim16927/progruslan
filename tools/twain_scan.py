@@ -81,14 +81,22 @@ def main():
             except Exception:
                 pass
 
-        src.request_acquire(show_ui=True, modal_ui=True)
+        try:
+            src.request_acquire(show_ui=True, modal_ui=True)
+        except Exception as e:
+            print(f"ERROR: request_acquire: {type(e).__name__}: {e}")
+            return 7
         idx = 0
         while True:
             try:
                 rv = src.xfer_image_natively()
-            except Exception:
+            except Exception as e:
+                if idx == 0:
+                    print(f"INFO: передача прервана: {type(e).__name__}: {e}")
                 break
             if not rv:
+                if idx == 0:
+                    print("INFO: сканер не вернул изображение (нет данных).")
                 break
             handle = rv[0] if isinstance(rv, tuple) else rv
             path = os.path.join(out_dir, f"doc_{idx:02d}.bmp")
