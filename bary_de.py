@@ -141,10 +141,10 @@ class MainWindow(QWidget):
         self.guard_folder: str | None = None
         self.pending_passport_scans: list[str] = []
         self.last_pdf_path: str | None = None
-        # Кэш состояния сканера (проверяется при старте и после считывания),
-        # чтобы не дёргать SDK на каждый апдейт статус-бара.
+        # Кэш состояния сканера. ВАЖНО: НЕ проверяем при старте — обращение к
+        # Regula SDK может блокировать запуск окна. Состояние обновится после
+        # первого «Считать паспорт».
         self._scanner_ok: bool | None = None
-        self._refresh_scanner_state()
 
         self.setWindowTitle("🏛️ АРМ Оператора — Sokrat Helper 🏛️")
         self.resize(1080, 1000)
@@ -410,6 +410,8 @@ class MainWindow(QWidget):
             server_state = "офлайн (локальные блокировки)"
         if self.cfg.mock_scanners:
             scan_mode = "Сканеры: MOCK"
+        elif self._scanner_ok is None:
+            scan_mode = "Сканер: оборудование"
         elif self._scanner_ok:
             scan_mode = "Сканер: подключён ✓"
         else:
