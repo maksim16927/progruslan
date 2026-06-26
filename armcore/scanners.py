@@ -632,37 +632,53 @@ class RegulaScanner(BaseScanner):
                 continue
 
         WHITE = (0x06, 0x02, 0x04, 0x00000006)  # White_Full / White_Top / White_Side
-        candidates: list = []
+        eos: list = []        # полный кадр сенсора (без обрезки по документу)
+        cropped: list = []    # обрезанный по контуру документа
 
-        # По источнику света (белый) — полная страница.
+        # EOS-методы дают ВЕСЬ кадр (с полями) — приоритет, чтобы верх не срезался.
         for light in WHITE:
-            for getter in ("GetReaderBitmapImageByLightIndex",
-                           "GetReaderEOSBitmapImageByLightIndex"):
-                fn = getattr(reader, getter, None)
-                if fn is None:
-                    continue
+            fn = getattr(reader, "GetReaderEOSBitmapImageByLightIndex", None)
+            if fn is not None:
                 try:
                     raw = self._to_bytes(fn(light))
                     if raw:
-                        candidates.append(raw)
+                        eos.append(raw)
                 except Exception:  # noqa: BLE001
-                    continue
-        # По индексу кадра.
+                    pass
         for idx in range(0, 4):
-            for getter in ("GetReaderBitmapImage", "GetReaderEOSBitmapImage"):
-                fn = getattr(reader, getter, None)
-                if fn is None:
-                    continue
+            fn = getattr(reader, "GetReaderEOSBitmapImage", None)
+            if fn is not None:
                 try:
                     raw = self._to_bytes(fn(idx))
                     if raw:
-                        candidates.append(raw)
+                        eos.append(raw)
                 except Exception:  # noqa: BLE001
-                    continue
+                    pass
+        # Обрезанные по документу — запасной вариант.
+        for light in WHITE:
+            fn = getattr(reader, "GetReaderBitmapImageByLightIndex", None)
+            if fn is not None:
+                try:
+                    raw = self._to_bytes(fn(light))
+                    if raw:
+                        cropped.append(raw)
+                except Exception:  # noqa: BLE001
+                    pass
+        for idx in range(0, 4):
+            fn = getattr(reader, "GetReaderBitmapImage", None)
+            if fn is not None:
+                try:
+                    raw = self._to_bytes(fn(idx))
+                    if raw:
+                        cropped.append(raw)
+                except Exception:  # noqa: BLE001
+                    pass
 
-        if not candidates:
-            return b""
-        return max(candidates, key=len)  # самый большой = полная страница
+        if eos:
+            return max(eos, key=len)          # полный кадр — верх не срезан
+        if cropped:
+            return max(cropped, key=len)
+        return b""
 
     def _save_images(self, reader, out_dir: str) -> List[str]:
         """Сохранить ПОЛНЫЙ скан паспорта (без вырезки лица).
