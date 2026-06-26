@@ -675,10 +675,31 @@ class RegulaScanner(BaseScanner):
                     pass
 
         if eos:
-            return max(eos, key=len)   # полный кадр, ориентация уже правильная
+            return self._enhance(max(eos, key=len))   # полный кадр + улучшение
         if cropped:
-            return max(cropped, key=len)
+            return self._enhance(max(cropped, key=len))
         return b""
+
+    @staticmethod
+    def _enhance(raw: bytes) -> bytes:
+        """Лёгкое улучшение читаемости снимка: автоконтраст + резкость.
+
+        Помогает проявить бледный текст (например, верхнюю строку названия).
+        """
+        if not raw:
+            return raw
+        try:
+            from io import BytesIO
+            from PIL import ImageOps, ImageEnhance
+            img = Image.open(BytesIO(raw)).convert("RGB")
+            img = ImageOps.autocontrast(img, cutoff=1)
+            img = ImageEnhance.Contrast(img).enhance(1.15)
+            img = ImageEnhance.Sharpness(img).enhance(1.6)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=92)
+            return buf.getvalue()
+        except Exception:  # noqa: BLE001 — не вышло улучшить, отдаём как есть
+            return raw
 
     @staticmethod
     def _rotate180(raw: bytes) -> bytes:
