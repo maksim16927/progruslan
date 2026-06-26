@@ -767,140 +767,75 @@ class RegulaScanner(BaseScanner):
 class KodakScanner(BaseScanner):
     """Сканер документов (Kodak SceyeX и др.) — многостраничные сшитые документы.
 
-    Использует **TWAIN** через пакет ``pytwain`` (импортируется как ``twain``).
-    Ставить именно ``pip install pytwain`` — он включает нужную ``TWAINDSM.dll``,
-    поэтому отдельно качать DLL не надо. Работает с TWAIN-сканерами, в т.ч. с
-    теми, что не видны через WIA.
+    Драйверы TWAIN сканеров документов (Kodak SceyeX и др.) обычно 32-битные и
+    не видны из 64-битного Python (а PyQt6 не ставится под 32-бит). Поэтому
+    сканирование вынесено в отдельный 32-битный помощник ``tools/twain_scan.py``,
+    который запускается через ``py -3-32``. Основная программа остаётся 64-битной,
+    а помощнику нужен только пакет ``pytwain``.
     """
-    name = "Сканер документов (TWAIN)"
+    name = "Сканер документов (TWAIN, 32-bit helper)"
 
     def __init__(self, device_name: Optional[str] = None):
         self.device_name = device_name
 
-    def _open_twain(self):
-        """Загрузить модуль twain (pytwain, только Windows). Вернуть модуль."""
-        try:
-            import twain  # type: ignore  (pip install pytwain)
-        except ImportError as e:
-            raise ScannerError(
-                "Не установлен пакет pytwain (pip install pytwain) — нужен для "
-                "сканера документов по TWAIN."
-            ) from e
-        return twain
+    @staticmethod
+    def _py32_cmd() -> list:
+        """Команда запуска 32-битного Python: ARM_PY32 -> py -3-32."""
+        exe = os.environ.get("ARM_PY32")
+        if exe:
+            return [exe]
+        return ["py", "-3-32"]
 
     @staticmethod
-    def _find_dsm(twain_module) -> Optional[str]:
-        """Найти TWAINDSM.dll: env ARM_TWAINDSM -> пакет pytwain -> System32."""
-        import glob
-        env = os.environ.get("ARM_TWAINDSM")
-        if env and os.path.exists(env):
-            return env
-        cands: List[str] = []
-        # Рядом с пакетом pytwain (он иногда кладёт туда DLL).
-        try:
-            pkg_dir = os.path.dirname(os.path.abspath(twain_module.__file__))
-            cands += glob.glob(os.path.join(pkg_dir, "**", "*twaindsm*.dll"),
-                               recursive=True)
-            cands += glob.glob(os.path.join(pkg_dir, "**", "TWAINDSM.dll"),
-                               recursive=True)
-        except Exception:  # noqa: BLE001
-            pass
-        # Системные расположения.
-        win = os.environ.get("WINDIR", r"C:\Windows")
-        cands += [os.path.join(win, "twaindsm.dll"),
-                  os.path.join(win, "System32", "twaindsm.dll"),
-                  os.path.join(win, "SysWOW64", "twaindsm.dll")]
-        for c in cands:
-            if c and os.path.exists(c):
-                return c
-        return None
+    def _helper_path() -> str:
+        here = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(os.path.dirname(here), "tools", "twain_scan.py")
 
     def is_available(self) -> bool:
-        try:
-            self._open_twain()
-            return True
-        except ScannerError:
-            return False
+        # Реальная доступность проверяется при запуске помощника; здесь — мягко.
+        return True
 
-    def scan_document(self, out_dir: str, show_ui: bool = True) -> List[str]:
-        """Отсканировать документ через TWAIN. Возвращает пути страниц (jpg)."""
-        twain = self._open_twain()
+    def scan_document(self, out_dir: str) -> List[str]:
+        """Отсканировать документ 32-битным помощником TWAIN. Вернуть пути jpg."""
+        import subprocess
         os.makedirs(out_dir, exist_ok=True)
-        import struct
-        bits = struct.calcsize("P") * 8  # разрядность Python (32/64)
-        paths: List[str] = []
-        sm = None
-        src = None
-        try:
-            dsm = self._find_dsm(twain)
-            try:
-                sm = twain.SourceManager(0, dsm_name=dsm) if dsm else twain.SourceManager(0)
-            except Exception as e:  # noqa: BLE001
-                raise ScannerError(
-                    f"TWAIN: не удалось запустить менеджер источников (DSM): {e}. "
-                    f"Python {bits}-бит. Найденный DSM: {dsm or 'не найден'}. "
-                    "Скачайте TWAINDSM.dll нужной разрядности и укажите путь в "
-                    "переменной ARM_TWAINDSM, либо положите его в C:\\Windows\\System32."
-                ) from e
-            src = (sm.open_source(self.device_name) if self.device_name
-                   else sm.open_source())
-            if src is None:
-                raise ScannerError("TWAIN: сканер документов не выбран/не найден.")
-            for cap, ctype, val in (
-                ("ICAP_PIXELTYPE", "TWTY_UINT16", "TWPT_RGB"),
-                ("ICAP_XRESOLUTION", "TWTY_FIX32", float(self.dpi)),
-                ("ICAP_YRESOLUTION", "TWTY_FIX32", float(self.dpi)),
-            ):
-                try:
-                    capc = getattr(twain, cap)
-                    typ = getattr(twain, ctype)
-                    v = getattr(twain, val) if isinstance(val, str) else val
-                    src.set_capability(capc, typ, v)
-                except Exception:  # noqa: BLE001 — не все сканеры всё поддерживают
-                    pass
+        helper = self._helper_path()
+        if not os.path.exists(helper):
+            raise ScannerError(f"Не найден помощник сканирования: {helper}")
 
-            src.request_acquire(show_ui=show_ui, modal_ui=show_ui)
-            idx = 0
-            while True:
-                try:
-                    rv = src.xfer_image_natively()
-                except Exception:  # noqa: BLE001 — страниц больше нет / отмена
-                    break
-                if not rv:
-                    break
-                handle = rv[0] if isinstance(rv, tuple) else rv
-                bmp_path = os.path.join(out_dir, f"_doc_{idx:02d}.bmp")
-                try:
-                    twain.dib_to_bm_file(handle, bmp_path)
-                finally:
-                    try:
-                        twain.global_handle_free(handle)
-                    except Exception:  # noqa: BLE001
-                        pass
-                jpg_path = os.path.join(out_dir, f"doc_{idx:02d}.jpg")
-                try:
-                    _save_at_dpi(Image.open(bmp_path), jpg_path, self.dpi)
-                    os.remove(bmp_path)
-                    paths.append(jpg_path)
-                except Exception:  # noqa: BLE001
-                    paths.append(bmp_path)
-                idx += 1
-                more = rv[1] if isinstance(rv, tuple) and len(rv) > 1 else 0
-                if not more:
-                    break
-        except ScannerError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            raise ScannerError(f"TWAIN: ошибка сканирования документа: {e}") from e
-        finally:
-            for obj in (src, sm):
-                try:
-                    if obj is not None:
-                        obj.destroy()
-                except Exception:  # noqa: BLE001
-                    pass
+        cmd = self._py32_cmd() + [helper, out_dir]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except FileNotFoundError as e:
+            raise ScannerError(
+                "Не найден 32-битный Python (py -3-32). Установите 32-битный Python "
+                "и pytwain (см. Установка32.bat), либо задайте путь в ARM_PY32."
+            ) from e
+        except subprocess.TimeoutExpired as e:
+            raise ScannerError("TWAIN: сканирование заняло слишком долго (таймаут).") from e
+
+        output = (proc.stdout or "") + (proc.stderr or "")
+        if "ERROR:" in output:
+            msg = output[output.find("ERROR:"):].strip().splitlines()[0]
+            raise ScannerError(f"Сканер документов: {msg}")
+
+        # Собрать страницы (помощник сохраняет doc_NN.bmp) и перегнать в jpg.
+        import glob
+        bmps = sorted(glob.glob(os.path.join(out_dir, "doc_*.bmp")))
+        paths: List[str] = []
+        for bmp in bmps:
+            jpg = os.path.splitext(bmp)[0] + ".jpg"
+            try:
+                _save_at_dpi(Image.open(bmp), jpg, self.dpi)
+                os.remove(bmp)
+                paths.append(jpg)
+            except Exception:  # noqa: BLE001
+                paths.append(bmp)
         if not paths:
-            raise ScannerError("TWAIN: не получено ни одной страницы (отмена/нет сканера).")
+            raise ScannerError(
+                "Сканер документов: ни одной страницы не получено "
+                f"(отмена или сканер недоступен). Вывод: {output.strip()[:300]}"
+            )
         return paths
 
 
