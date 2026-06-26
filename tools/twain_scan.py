@@ -81,8 +81,12 @@ def main():
             except Exception:
                 pass
 
+        # show_ui=False — сканируем сразу, без окна драйвера (надёжнее: окно
+        # модального UI у части сканеров рвёт последовательность TWAIN ->
+        # SequenceError). ARM_TWAIN_UI=1 — принудительно показать окно драйвера.
+        show_ui = os.environ.get("ARM_TWAIN_UI", "0") == "1"
         try:
-            src.request_acquire(show_ui=True, modal_ui=True)
+            src.request_acquire(show_ui=show_ui, modal_ui=show_ui)
         except Exception as e:
             print(f"ERROR: request_acquire: {type(e).__name__}: {e}")
             return 7
