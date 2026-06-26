@@ -18,8 +18,8 @@ pytesseract>=0.3        # запасной прямой OCR
 opencv-python-headless  # зависимость passporteye (обработка изображения)
 
 # --- Сканеры (по мере подключения оборудования) ---
-# Kodak SceyeX через TWAIN:
-# pyinsane2 ; platform_system == "Windows"
+# Kodak SceyeX и другие сканеры документов через TWAIN:
+twain ; platform_system == "Windows"
 # Regula 7017: Document Reader SDK (локальный Web API сервис) — Python-пакет
 #   regula.documentreader.webclient; URL сервиса в ARM_REGULA_URL.
 #   См. armcore/scanners.py (RegulaScanner) и armcore/config.py.

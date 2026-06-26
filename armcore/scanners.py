@@ -776,17 +776,15 @@ class KodakScanner(BaseScanner):
         self.device_name = device_name
 
     def _open_twain(self):
-        # TODO(TWAIN): открыть устройство.
-        #   import pyinsane2
-        #   pyinsane2.init()
-        #   devices = pyinsane2.get_devices()
-        #   dev = <выбор по self.device_name>
-        #   pyinsane2.set_scanner_opt(dev, 'resolution', [self.dpi])
-        #   pyinsane2.set_scanner_opt(dev, 'mode', ['Color'])
-        raise ScannerError(
-            "TWAIN-драйвер Kodak не подключён. Реализуйте KodakScanner._open_twain "
-            "через pyinsane2/twain (mode=Color, resolution=300)."
-        )
+        """Загрузить модуль twain (только Windows). Вернуть модуль."""
+        try:
+            import twain  # type: ignore  (pip install twain, только Windows)
+        except ImportError as e:
+            raise ScannerError(
+                "Не установлен пакет twain (pip install twain) — нужен для "
+                "сканера документов. Установите его на рабочем месте."
+            ) from e
+        return twain
 
     def is_available(self) -> bool:
         try:
@@ -795,11 +793,82 @@ class KodakScanner(BaseScanner):
         except ScannerError:
             return False
 
-    def scan_document(self, out_dir: str) -> List[str]:
-        self._open_twain()
-        # TODO(TWAIN): отсканировать все листы как многостраничный документ при
-        #   300 dpi (цвет), сохранить страницы в out_dir, вернуть список путей.
-        raise ScannerError("scan_document: требуется реализация под Kodak/TWAIN")
+    def scan_document(self, out_dir: str, show_ui: bool = True) -> List[str]:
+        """Отсканировать документ через TWAIN (любой подключённый сканер).
+
+        show_ui=True открывает диалог сканера — оператор выбирает устройство и
+        параметры, можно сканировать несколько страниц. Каждая страница
+        сохраняется в out_dir как jpg (300 dpi, цвет).
+        """
+        twain = self._open_twain()
+        os.makedirs(out_dir, exist_ok=True)
+        paths: List[str] = []
+        sm = None
+        src = None
+        try:
+            sm = twain.SourceManager(0)
+            src = (sm.open_source(self.device_name) if self.device_name
+                   else sm.open_source())
+            if src is None:
+                raise ScannerError("TWAIN: сканер документов не выбран/не найден.")
+            # Параметры качества из ТЗ: цвет, 300 dpi (если поддерживается).
+            for cap, ctype, val in (
+                ("ICAP_PIXELTYPE", "TWTY_UINT16", "TWPT_RGB"),
+                ("ICAP_XRESOLUTION", "TWTY_FIX32", float(self.dpi)),
+                ("ICAP_YRESOLUTION", "TWTY_FIX32", float(self.dpi)),
+            ):
+                try:
+                    capc = getattr(twain, cap)
+                    typ = getattr(twain, ctype)
+                    v = getattr(twain, val) if isinstance(val, str) else val
+                    src.set_capability(capc, typ, v)
+                except Exception:  # noqa: BLE001 — не все сканеры всё поддерживают
+                    pass
+
+            src.request_acquire(show_ui=show_ui, modal_ui=show_ui)
+            idx = 0
+            while True:
+                try:
+                    rv = src.xfer_image_natively()
+                except Exception:  # noqa: BLE001 — больше страниц нет
+                    break
+                if not rv:
+                    break
+                handle = rv[0] if isinstance(rv, tuple) else rv
+                bmp_path = os.path.join(out_dir, f"doc_{idx:02d}.bmp")
+                try:
+                    twain.dib_to_bm_file(handle, bmp_path)
+                finally:
+                    try:
+                        twain.global_handle_free(handle)
+                    except Exception:  # noqa: BLE001
+                        pass
+                # Перегнать BMP -> JPG (300 dpi) и удалить BMP.
+                jpg_path = os.path.join(out_dir, f"doc_{idx:02d}.jpg")
+                try:
+                    _save_at_dpi(Image.open(bmp_path), jpg_path, self.dpi)
+                    os.remove(bmp_path)
+                    paths.append(jpg_path)
+                except Exception:  # noqa: BLE001 — оставить bmp, если конвертация не вышла
+                    paths.append(bmp_path)
+                idx += 1
+                more = rv[1] if isinstance(rv, tuple) and len(rv) > 1 else 0
+                if not more:
+                    break
+        except ScannerError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ScannerError(f"TWAIN: ошибка сканирования документа: {e}") from e
+        finally:
+            for obj in (src, sm):
+                try:
+                    if obj is not None:
+                        obj.destroy()
+                except Exception:  # noqa: BLE001
+                    pass
+        if not paths:
+            raise ScannerError("TWAIN: не получено ни одной страницы.")
+        return paths
 
 
 # --------------------------------------------------------------------------- #
