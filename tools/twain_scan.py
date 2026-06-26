@@ -81,41 +81,63 @@ def main():
             except Exception:
                 pass
 
-        # show_ui=False — сканируем сразу, без окна драйвера (надёжнее: окно
-        # модального UI у части сканеров рвёт последовательность TWAIN ->
-        # SequenceError). ARM_TWAIN_UI=1 — принудительно показать окно драйвера.
+        # show_ui=False — сканируем сразу, без окна драйвера. ARM_TWAIN_UI=1 — с окном.
         show_ui = os.environ.get("ARM_TWAIN_UI", "0") == "1"
+
+        # Надёжный высокоуровневый способ pytwain: acquire_file сам корректно
+        # проходит состояния TWAIN и сохраняет каждую страницу в файл (по пути из
+        # колбэка before). Это лечит SequenceError ручной передачи.
+        saved = []
+
+        def before(_img_info):
+            p = os.path.join(out_dir, f"doc_{len(saved):02d}.bmp")
+            saved.append(p)
+            return p
+
+        def after(_more):
+            return None
+
+        used = "acquire_file"
         try:
-            src.request_acquire(show_ui=show_ui, modal_ui=show_ui)
+            src.acquire_file(before=before, after=after,
+                             show_ui=show_ui, modal=show_ui)
         except Exception as e:
-            print(f"ERROR: request_acquire: {type(e).__name__}: {e}")
-            return 7
-        idx = 0
-        while True:
+            # Фолбэк на ручную передачу, если acquire_file недоступен/сбойнул.
+            used = f"acquire_file FAIL ({type(e).__name__}: {e}); native"
+            saved.clear()
             try:
-                rv = src.xfer_image_natively()
-            except Exception as e:
-                if idx == 0:
-                    print(f"INFO: передача прервана: {type(e).__name__}: {e}")
-                break
-            if not rv:
-                if idx == 0:
-                    print("INFO: сканер не вернул изображение (нет данных).")
-                break
-            handle = rv[0] if isinstance(rv, tuple) else rv
-            path = os.path.join(out_dir, f"doc_{idx:02d}.bmp")
-            try:
-                twain.dib_to_bm_file(handle, path)
-            finally:
-                try:
-                    twain.global_handle_free(handle)
-                except Exception:
-                    pass
-            idx += 1
-            more = rv[1] if isinstance(rv, tuple) and len(rv) > 1 else 0
-            if not more:
-                break
-        print(f"PAGES={idx}")
+                src.request_acquire(show_ui=show_ui, modal_ui=show_ui)
+                idx = 0
+                while True:
+                    try:
+                        rv = src.xfer_image_natively()
+                    except Exception as e2:
+                        if idx == 0:
+                            print(f"INFO: native прервана: {type(e2).__name__}: {e2}")
+                        break
+                    if not rv:
+                        break
+                    handle = rv[0] if isinstance(rv, tuple) else rv
+                    p = os.path.join(out_dir, f"doc_{idx:02d}.bmp")
+                    try:
+                        twain.dib_to_bm_file(handle, p)
+                        saved.append(p)
+                    finally:
+                        try:
+                            twain.global_handle_free(handle)
+                        except Exception:
+                            pass
+                    idx += 1
+                    more = rv[1] if isinstance(rv, tuple) and len(rv) > 1 else 0
+                    if not more:
+                        break
+            except Exception as e3:
+                print(f"INFO: способ={used}; ошибка: {type(e3).__name__}: {e3}")
+
+        # Оставляем только реально записанные файлы.
+        real = [p for p in saved if os.path.exists(p)]
+        print(f"INFO: способ={used}")
+        print(f"PAGES={len(real)}")
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
