@@ -675,8 +675,7 @@ class RegulaScanner(BaseScanner):
                     pass
 
         if eos:
-            # Полный кадр сенсора приходит перевёрнутым — разворачиваем на 180°.
-            return self._rotate180(max(eos, key=len))
+            return max(eos, key=len)   # полный кадр, ориентация уже правильная
         if cropped:
             return max(cropped, key=len)
         return b""
