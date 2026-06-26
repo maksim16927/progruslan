@@ -797,6 +797,27 @@ class KodakScanner(BaseScanner):
         except ScannerError:
             return False
 
+    def list_wia_devices(self) -> list:
+        """Список WIA-устройств (имя, тип) — видит ли Windows сканер через WIA."""
+        try:
+            import win32com.client  # type: ignore
+            mgr = win32com.client.Dispatch("WIA.DeviceManager")
+        except Exception as e:  # noqa: BLE001
+            return [f"WIA.DeviceManager недоступен: {e}"]
+        out = []
+        try:
+            infos = mgr.DeviceInfos
+            for i in range(1, int(infos.Count) + 1):
+                info = infos.Item(i)
+                try:
+                    name = info.Properties("Name").Value
+                except Exception:  # noqa: BLE001
+                    name = "?"
+                out.append(f"{name} (type={getattr(info, 'Type', '?')})")
+        except Exception as e:  # noqa: BLE001
+            out.append(f"ошибка перечисления: {e}")
+        return out
+
     def scan_document(self, out_dir: str) -> List[str]:
         """Отсканировать документ через WIA (встроено в Windows, без доп. DLL).
 
@@ -806,12 +827,28 @@ class KodakScanner(BaseScanner):
         """
         dialog = self._wia_dialog()
         os.makedirs(out_dir, exist_ok=True)
+
+        # Проверим, видит ли WIA хоть один сканер — иначе понятная ошибка.
+        devices = self.list_wia_devices()
+        if not devices:
+            raise ScannerError(
+                "WIA не видит ни одного сканера. Возможно, сканер работает только "
+                "по TWAIN. Подключите/включите WIA-совместимый сканер или скажите "
+                "разработчику — вернём TWAIN."
+            )
+
         paths: List[str] = []
         idx = 0
         while True:
             try:
                 img = dialog.ShowAcquireImage()  # стандартный диалог сканера
-            except Exception:  # noqa: BLE001 — пользователь нажал «Отмена» / ошибка
+            except Exception as e:  # noqa: BLE001 — отмена ИЛИ реальная ошибка
+                # На первой странице покажем реальную причину, дальше — это «Отмена».
+                if idx == 0:
+                    raise ScannerError(
+                        f"WIA: не удалось отсканировать. Видимые устройства: "
+                        f"{devices}. Ошибка: {e}"
+                    ) from e
                 break
             if img is None:
                 break
