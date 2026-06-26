@@ -784,9 +784,36 @@ class KodakScanner(BaseScanner):
         except ImportError as e:
             raise ScannerError(
                 "Не установлен пакет pytwain (pip install pytwain) — нужен для "
-                "сканера документов по TWAIN. Он включает TWAINDSM.dll."
+                "сканера документов по TWAIN."
             ) from e
         return twain
+
+    @staticmethod
+    def _find_dsm(twain_module) -> Optional[str]:
+        """Найти TWAINDSM.dll: env ARM_TWAINDSM -> пакет pytwain -> System32."""
+        import glob
+        env = os.environ.get("ARM_TWAINDSM")
+        if env and os.path.exists(env):
+            return env
+        cands: List[str] = []
+        # Рядом с пакетом pytwain (он иногда кладёт туда DLL).
+        try:
+            pkg_dir = os.path.dirname(os.path.abspath(twain_module.__file__))
+            cands += glob.glob(os.path.join(pkg_dir, "**", "*twaindsm*.dll"),
+                               recursive=True)
+            cands += glob.glob(os.path.join(pkg_dir, "**", "TWAINDSM.dll"),
+                               recursive=True)
+        except Exception:  # noqa: BLE001
+            pass
+        # Системные расположения.
+        win = os.environ.get("WINDIR", r"C:\Windows")
+        cands += [os.path.join(win, "twaindsm.dll"),
+                  os.path.join(win, "System32", "twaindsm.dll"),
+                  os.path.join(win, "SysWOW64", "twaindsm.dll")]
+        for c in cands:
+            if c and os.path.exists(c):
+                return c
+        return None
 
     def is_available(self) -> bool:
         try:
@@ -799,16 +826,21 @@ class KodakScanner(BaseScanner):
         """Отсканировать документ через TWAIN. Возвращает пути страниц (jpg)."""
         twain = self._open_twain()
         os.makedirs(out_dir, exist_ok=True)
+        import struct
+        bits = struct.calcsize("P") * 8  # разрядность Python (32/64)
         paths: List[str] = []
         sm = None
         src = None
         try:
+            dsm = self._find_dsm(twain)
             try:
-                sm = twain.SourceManager(0)
+                sm = twain.SourceManager(0, dsm_name=dsm) if dsm else twain.SourceManager(0)
             except Exception as e:  # noqa: BLE001
                 raise ScannerError(
                     f"TWAIN: не удалось запустить менеджер источников (DSM): {e}. "
-                    "Проверьте установку pytwain (pip install pytwain)."
+                    f"Python {bits}-бит. Найденный DSM: {dsm or 'не найден'}. "
+                    "Скачайте TWAINDSM.dll нужной разрядности и укажите путь в "
+                    "переменной ARM_TWAINDSM, либо положите его в C:\\Windows\\System32."
                 ) from e
             src = (sm.open_source(self.device_name) if self.device_name
                    else sm.open_source())
