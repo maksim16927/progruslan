@@ -130,6 +130,7 @@ class RegulaScanner(BaseScanner):
         self._reader = None
         self._proc_count = 0       # сколько раз пришло OnProcessingFinished
         self._events_ok = False    # удалось ли привязать COM-события
+        self._capture_cmd = "не вызывалась"  # какой командой запускали захват
 
     # ------------------------------------------------------------------ SDK
     def _load_sdk(self):
@@ -180,6 +181,7 @@ class RegulaScanner(BaseScanner):
             ("DoReceiveAllScannedImages", True),
             ("RotateResultImages", True),        # выровнять кадр вертикально
             ("DoChangeOrientationByFace", True), # ориентация по лицу
+            ("AutoScan", True),                  # автозахват при появлении документа
             ("InBackground", False),
         ):
             try:
@@ -222,9 +224,53 @@ class RegulaScanner(BaseScanner):
         except Exception as e:  # noqa: BLE001
             raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
         self._clear_results(reader)  # сбросить прошлый результат — фото будет новым
+        self._start_capture(reader)
         start_count = self._proc_count
         self._wait_for_result(reader, timeout_s, start_count=start_count)
         return self._collect(reader, out_dir)
+
+    def _start_capture(self, reader):
+        """Явно запустить захват документа.
+
+        Одного Connect() мало: SDK подключается и ждёт команду. Пробуем
+        известные имена команды сканирования из разных версий COM-интерфейса;
+        AutoScan (включён в _load_sdk) остаётся подстраховкой. Запоминаем,
+        какая команда сработала / какие пробовали — для диагностики.
+        """
+        tried = []
+        for cmd in ("Process", "DoScan", "Scan", "StartScan", "Capture",
+                    "DoProcess", "ScanDocument", "GetImages"):
+            fn = getattr(reader, cmd, None)
+            if fn is None:
+                continue
+            try:
+                fn()
+                self._capture_cmd = cmd
+                return
+            except Exception as e:  # noqa: BLE001 — метод есть, но не сработал
+                tried.append(f"{cmd}: {e}")
+        self._capture_cmd = "нет (" + ("; ".join(tried)[:200] or "методы не найдены") + ")"
+
+    @staticmethod
+    def _com_methods(reader) -> list:
+        """Реальные имена методов COM-объекта (для подбора команды сканирования)."""
+        names = set()
+        for attr in ("_prop_map_get_", "_prop_map_put_"):
+            names.update(getattr(reader, attr, {}) or {})
+        for n in dir(reader):
+            if not n.startswith("_"):
+                names.add(n)
+        oleobj = getattr(reader, "_oleobj_", None)
+        if oleobj is not None:
+            try:
+                ti = oleobj.GetTypeInfo()
+                attr = ti.GetTypeAttr()
+                for i in range(attr.cFuncs):
+                    fd = ti.GetFuncDesc(i)
+                    names.add(ti.GetNames(fd.memid)[0])
+            except Exception:  # noqa: BLE001 — typeinfo недоступен
+                pass
+        return sorted(names)
 
     def diagnostics(self, reader=None) -> dict:
         """Какие типы результатов сейчас доступны у ридера (для отладки)."""
@@ -238,6 +284,8 @@ class RegulaScanner(BaseScanner):
         # Пробное чтение ключевых полей.
         info["mrz_preview"] = self._mrz(reader)[:60]
         info["surname_preview"] = self._text(reader, "SURNAME")
+        info["capture_cmd"] = getattr(self, "_capture_cmd", "не вызывалась")
+        info["com_methods"] = ", ".join(self._com_methods(reader))[:600]
         return info
 
     def process_image(self, image_path: str, out_dir: str) -> PassportCapture:
@@ -304,7 +352,10 @@ class RegulaScanner(BaseScanner):
                 return
             diag = self.diagnostics(reader)
             raise ScannerError(
-                f"Regula: документ не обработан за {timeout_s} c. Диагностика: {diag}."
+                f"Regula: документ не обработан за {timeout_s} c. "
+                "Положите паспорт на стекло разворотом вниз ДО нажатия кнопки и "
+                "проверьте, что сканер виден в фирменной программе Regula. "
+                f"Диагностика: {diag}."
             )
 
         # --- фолбэк: опрос (события не привязались) ---
@@ -326,7 +377,9 @@ class RegulaScanner(BaseScanner):
         diag = self.diagnostics(reader)
         raise ScannerError(
             "Regula: не дождались результата распознавания за "
-            f"{timeout_s} c. Диагностика: {diag}. Пришлите эту строку разработчику."
+            f"{timeout_s} c. Положите паспорт на стекло разворотом вниз ДО "
+            "нажатия кнопки и проверьте, что сканер виден в фирменной программе "
+            f"Regula. Диагностика: {diag}. Пришлите эту строку разработчику."
         )
 
     # ------------------------------------------------------------- разбор
