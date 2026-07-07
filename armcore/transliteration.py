@@ -155,3 +155,25 @@ def to_title_name(text: str) -> str:
 def transliterate_name(latin_name: str) -> str:
     """Удобная обёртка: транслитерировать ФИО из MRZ и привести к Title Case."""
     return to_title_name(translit_lat_to_cyr(latin_name))
+
+
+# --- МЧЗ внутреннего паспорта РФ: «модернизированный клер» ---
+# Приказ МВД России N 773, прил. 24 (ранее N 851/ФМС N 279): русские буквы
+# кодируются латиницей и ЦИФРАМИ. Обратная таблица символ -> кириллица.
+_KLER = {
+    "A": "А", "B": "Б", "V": "В", "G": "Г", "D": "Д", "E": "Е", "2": "Ё",
+    "J": "Ж", "Z": "З", "I": "И", "Q": "Й", "K": "К", "L": "Л", "M": "М",
+    "N": "Н", "O": "О", "P": "П", "R": "Р", "S": "С", "T": "Т", "U": "У",
+    "F": "Ф", "H": "Х", "C": "Ц", "3": "Ч", "4": "Ш", "W": "Щ", "X": "Ъ",
+    "Y": "Ы", "9": "Ь", "6": "Э", "7": "Ю", "8": "Я",
+}
+
+
+def translit_mrz_ru_internal(text: str) -> str:
+    """МЧЗ внутреннего паспорта РФ -> кириллица (посимвольно, «клер»)."""
+    return "".join(_KLER.get(ch.upper(), ch) for ch in (text or ""))
+
+
+def transliterate_name_ru_internal(mrz_name: str) -> str:
+    """ФИО из МЧЗ внутреннего паспорта РФ -> «Иванов» (Title Case)."""
+    return to_title_name(translit_mrz_ru_internal(mrz_name))

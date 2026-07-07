@@ -30,19 +30,28 @@ class MrzResult:
     sex: str = ""                 # М/Ж
     expiry_date: str = ""         # ДД.ММ.ГГГГ
     personal_id: str = ""
+    issue_date: str = ""          # дата выдачи (внутренний паспорт РФ)
+    department_code: str = ""     # код подразделения (внутренний паспорт РФ)
+    ru_internal: bool = False     # внутренний паспорт РФ (нац. формат МЧЗ)
     valid: bool = True            # сошлись ли контрольные цифры
     warnings: List[str] = field(default_factory=list)
 
     def to_fields(self) -> Dict[str, str]:
         """Привести к ключам полей GUI (как в bary_de.py)."""
-        family_cyr = transliteration.transliterate_name(self.family_latin)
-        given_cyr = transliteration.transliterate_name(self.given_latin)
+        if self.ru_internal:
+            # Внутренний паспорт РФ: транслитерация «модернизированный клер»
+            # (Ё=2, Ч=3, Ш=4, Щ=W, Ъ=X, Ь=9, Э=6, Ю=7, Я=8, Й=Q).
+            family_cyr = transliteration.transliterate_name_ru_internal(self.family_latin)
+            given_cyr = transliteration.transliterate_name_ru_internal(self.given_latin)
+        else:
+            family_cyr = transliteration.transliterate_name(self.family_latin)
+            given_cyr = transliteration.transliterate_name(self.given_latin)
         # В странах СНГ в поле «имена» нередко идут имя + отчество.
         parts = given_cyr.split()
         name = parts[0] if parts else ""
         patronymic = " ".join(parts[1:]) if len(parts) > 1 else ""
         fio = " ".join(p for p in (family_cyr, name, patronymic) if p)
-        return {
+        out = {
             "FIO": fio,
             "FAMILY": family_cyr,
             "NAME": name,
@@ -54,6 +63,9 @@ class MrzResult:
             "COUNTRY_CODE": self.country_code,
             "PERSONAL_ID": self.personal_id,
         }
+        if self.issue_date:
+            out["DATE_ISSUE"] = self.issue_date
+        return out
 
 
 # --- контрольные цифры ICAO Doc 9303 ---
@@ -130,6 +142,21 @@ def parse_td3(line1: str, line2: str) -> MrzResult:
     res.birth_date = _parse_date(birth, future=False)
     res.expiry_date = _parse_date(expiry, future=True)
 
+    # Внутренний паспорт РФ (тип PN, нац. формат МЧЗ, приказ МВД N 773 прил. 24):
+    # «доп. данные» (поз. 29-42) — это НЕ персональный номер, а
+    # [последняя цифра номера][дата выдачи ГГММДД][код подразделения 6 цифр].
+    # Срока действия у внутреннего паспорта нет.
+    res.ru_internal = (res.document_type.startswith("PN")
+                       and res.country_code.upper() == "RUS")
+    if res.ru_internal:
+        extra = personal.replace("<", "")
+        if len(extra) >= 13 and extra.isdigit():
+            res.passport_number = _clean(passport) + extra[0]   # 10 цифр: серия+номер
+            res.issue_date = _parse_date(extra[1:7], future=False)
+            res.department_code = f"{extra[7:10]}-{extra[10:13]}"
+        res.personal_id = ""          # такого поля во внутреннем паспорте нет
+        res.expiry_date = ""          # срок действия отсутствует
+
     # Проверка контрольных цифр (только для цифровых полей).
     def verify(label: str, data: str, cd: str):
         if not cd.isdigit():
@@ -140,11 +167,17 @@ def parse_td3(line1: str, line2: str) -> MrzResult:
 
     verify("номер паспорта", passport, passport_cd)
     verify("дата рождения", birth, birth_cd)
-    verify("срок действия", expiry, expiry_cd)
-    if _clean(personal):
-        verify("персональный номер", personal, personal_cd)
+    if not res.ru_internal:
+        verify("срок действия", expiry, expiry_cd)
+        if _clean(personal):
+            verify("персональный номер", personal, personal_cd)
+    else:
+        verify("дата выдачи и код подразделения", personal, personal_cd)
     composite = passport + passport_cd + birth + birth_cd + expiry + expiry_cd + personal + personal_cd
     verify("итоговая контрольная сумма", composite, composite_cd)
+    if not res.valid:
+        # Для разбора проблем: показать, как именно прочитались строки MRZ.
+        res.warnings.append(f"MRZ, как прочитано: [{line1}] [{line2}]")
 
     return res
 
