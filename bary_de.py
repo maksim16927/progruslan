@@ -712,18 +712,63 @@ class MainWindow(QWidget):
         winio_open_folder(folder)
 
     def on_scan_pages(self):
-        """Постранично отсканировать паспорт на Regula (режим booksheet)."""
+        """Постранично отсканировать паспорт на Regula (режим booksheet).
+
+        Regula снимает по одному развороту: цикл «положите разворот -> захват ->
+        сканировать следующий?». Каждый снимок сохраняется как page_NN.jpg.
+        Для MockScanner остаётся прежний путь (scan_pages из папки-источника).
+        """
         folder = self._ensure_client()
         if not folder:
             return
-        try:
-            dest = storage.subfolder(folder, "passport_raw")
-            pages = self.passport_scanner.scan_pages(dest)
-        except scanners.ScannerError as e:
-            QMessageBox.critical(self, "Сканер недоступен", str(e))
+        dest = storage.subfolder(folder, "passport_raw")
+
+        if not isinstance(self.passport_scanner, scanners.RegulaScanner):
+            try:
+                pages = self.passport_scanner.scan_pages(dest)
+            except scanners.ScannerError as e:
+                QMessageBox.critical(self, "Сканер недоступен", str(e))
+                return
+            QMessageBox.information(self, "Готово",
+                                   f"Отсканировано страниц: {len(pages)}\nСохранены в:\n{dest}")
             return
-        QMessageBox.information(self, "Готово",
-                               f"Отсканировано страниц: {len(pages)}\nСохранены в:\n{dest}")
+
+        import shutil
+        import tempfile
+        # Нумерация продолжается после уже отсканированных страниц.
+        existing = [f for f in os.listdir(dest)
+                    if f.lower().startswith("page_")] if os.path.isdir(dest) else []
+        num = len(existing) + 1
+        saved = 0
+        while True:
+            QMessageBox.information(
+                self, "Сканирование страниц",
+                f"Положите разворот {num} на стекло сканера и нажмите ОК —\n"
+                "начнётся захват.")
+            tmp = tempfile.mkdtemp(prefix="arm_regula_page_")
+            try:
+                cap = self.passport_scanner.capture_passport(tmp)
+            except scanners.ScannerError as e:
+                QMessageBox.critical(self, "Ошибка сканирования", str(e))
+                break
+            if not cap.image_paths:
+                QMessageBox.warning(self, "Нет изображения",
+                                    "Сканер не вернул снимок страницы. Попробуйте ещё раз.")
+            else:
+                dst = os.path.join(dest, f"page_{num:02d}.jpg")
+                shutil.copyfile(cap.image_paths[0], dst)
+                saved += 1
+                num += 1
+            more = QMessageBox.question(
+                self, "Сканирование страниц",
+                f"Сохранено страниц: {saved}.\nСканировать следующий разворот?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            if more != QMessageBox.StandardButton.Yes:
+                break
+        if saved:
+            QMessageBox.information(self, "Готово",
+                                   f"Отсканировано страниц: {saved}\nСохранены в:\n{dest}")
 
     def on_make_spreads(self):
         """Сформировать развороты по 4 страницы на лист (2x2, A4 альбом, 300 dpi)."""
