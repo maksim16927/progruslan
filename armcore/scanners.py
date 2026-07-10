@@ -272,6 +272,61 @@ class RegulaScanner(BaseScanner):
                 pass
         return sorted(names)
 
+    # ------------------------------------------------- автозахват (watch)
+    def watch_begin(self):
+        """Включить режим ожидания: сканер сам захватит поднесённый паспорт.
+
+        Дальше периодически вызывать watch_poll() (например, по QTimer) —
+        когда документ обработан, она вернёт PassportCapture.
+        """
+        reader = self._load_sdk()
+        try:
+            if hasattr(reader, "Connect"):
+                reader.Connect()
+        except Exception as e:  # noqa: BLE001
+            raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
+        self._clear_results(reader)
+        self._watch_count = self._proc_count
+        self._watch_last = None
+        self._watch_seen = False
+
+    def watch_poll(self, out_dir: str, quiet_s: float = 1.5):
+        """Неблокирующая проверка автозахвата.
+
+        Возвращает PassportCapture, когда документ положили и SDK его обработал
+        (после «тихого периода» quiet_s — все проходы света завершены),
+        иначе None. После выдачи результата снова ждёт следующий документ.
+        """
+        import time
+        if self._reader is None:
+            return None
+        try:
+            import pythoncom  # type: ignore
+            pythoncom.PumpWaitingMessages()
+        except ImportError:
+            pass
+        reader = self._reader
+        # Признак активности: пришло событие обработки, либо (без событий)
+        # появился готовый снимок.
+        signaled = self._proc_count > getattr(self, "_watch_count", 0)
+        if not signaled and not self._events_ok:
+            # Без событий: сигналим один раз, когда снимок ПОЯВИЛСЯ.
+            has = self._has_portrait(reader)
+            signaled = has and not getattr(self, "_watch_seen", False)
+            self._watch_seen = has
+        if signaled:
+            self._watch_count = self._proc_count
+            self._watch_last = time.monotonic()
+            return None
+        last = getattr(self, "_watch_last", None)
+        if last is not None and time.monotonic() - last >= quiet_s:
+            self._watch_last = None
+            cap = self._collect(reader, out_dir)
+            self._clear_results(reader)  # готов к следующему паспорту
+            self._watch_seen = False
+            return cap
+        return None
+
     def diagnostics(self, reader=None) -> dict:
         """Какие типы результатов сейчас доступны у ридера (для отладки)."""
         reader = reader or self._load_sdk()

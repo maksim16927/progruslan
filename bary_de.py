@@ -237,6 +237,12 @@ class MainWindow(QWidget):
         row.addWidget(translit_btn)
         v.addLayout(row)
 
+        # Автозахват: сканер сам считывает паспорт, когда его подносят.
+        self.auto_check = QCheckBox("Автозахват: считывать паспорт при поднесении")
+        self.auto_check.setStyleSheet(S_CHECK)
+        self.auto_check.toggled.connect(self._toggle_auto_capture)
+        v.addWidget(self.auto_check)
+
         # Ручной выбор готовых сканов с диска (без сканера) — диалог выбора файлов.
         pick_row = QHBoxLayout()
         pick_row.setSpacing(10)
@@ -517,6 +523,57 @@ class MainWindow(QWidget):
                 "заполните поля вручную или вставьте MRZ в поле и нажмите «Распознать MRZ».")
         self._update_status()
 
+    # --- автозахват паспорта (сканер сам считывает при поднесении) --------
+    def _toggle_auto_capture(self, on: bool):
+        if self.cfg.mock_scanners:
+            if on:
+                QMessageBox.information(self, "Автозахват",
+                                        "В mock-режиме автозахват недоступен.")
+                self.auto_check.setChecked(False)
+            return
+        if on:
+            try:
+                self.passport_scanner.watch_begin()
+            except scanners.ScannerError as e:
+                QMessageBox.critical(self, "Сканер недоступен", str(e))
+                self.auto_check.setChecked(False)
+                return
+            if not hasattr(self, "auto_timer"):
+                self.auto_timer = QTimer(self)
+                self.auto_timer.setInterval(400)
+                self.auto_timer.timeout.connect(self._auto_capture_tick)
+            self.auto_timer.start()
+            self._update_status("автозахват включён — поднесите паспорт")
+        else:
+            if hasattr(self, "auto_timer"):
+                self.auto_timer.stop()
+            self._update_status()
+
+    def _auto_capture_tick(self):
+        import tempfile
+        try:
+            tmp = tempfile.mkdtemp(prefix="arm_auto_")
+            cap = self.passport_scanner.watch_poll(tmp)
+        except Exception:  # noqa: BLE001 — тик не должен ронять программу
+            return
+        if not cap or not (cap.mrz_text or cap.image_paths):
+            return
+        # Паспорт считан: заполнить поля БЕЗ модальных окон, чтобы не мешать.
+        self.pending_passport_scans = list(cap.image_paths)
+        if cap.mrz_text:
+            self.mrz_entry.setPlainText(cap.mrz_text)
+        result = mrz.parse(cap.mrz_text) if cap.mrz_text else None
+        if result:
+            self._set_fields(result.to_fields())
+            if cap.viz_fields:
+                self._set_fields(cap.viz_fields)
+            note = "паспорт считан автоматически"
+            if not result.valid:
+                note += " (проверьте: " + "; ".join(result.warnings[:1]) + ")"
+            self._update_status(note)
+        else:
+            self._update_status("скан получен, MRZ не распознан — проверьте поля")
+
     def on_read_and_consent(self):
         """Считать паспорт и сразу сформировать Согласие + открыть папку клиента.
 
@@ -536,11 +593,14 @@ class MainWindow(QWidget):
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка формирования", str(e))
             return
+        open_path = None
         for docx_path in created:
+            open_path = docx_path
             pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
             try:
                 winio.docx_to_pdf(docx_path, pdf_path)
                 self.last_pdf_path = pdf_path
+                open_path = pdf_path
             except Exception:  # noqa: BLE001 — без конвертера остаётся .docx
                 pass
         if not created:
@@ -549,7 +609,8 @@ class MainWindow(QWidget):
                 "Шаблон согласия не найден. Положите файл "
                 f"«{documents.DOC_TEMPLATES['Согласие']['file']}» в папку шаблонов:\n"
                 f"{self.cfg.templates_dir}")
-        winio_open_folder(folder)
+            return
+        winio_open_folder(open_path)  # открыть сам документ согласия (PDF или .docx)
 
     # --- выбор готовых сканов с диска (без оборудования) ------------------
     _IMG_FILTER = "Изображения (*.jpg *.jpeg *.png *.tif *.tiff *.bmp);;Все файлы (*)"
