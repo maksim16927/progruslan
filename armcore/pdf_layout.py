@@ -41,10 +41,19 @@ def list_images(folder: str) -> List[str]:
     return files
 
 
-def _fit_into(img: Image.Image, box_w: int, box_h: int) -> Image.Image:
-    """Вписать изображение в ячейку с сохранением пропорций (без обрезки)."""
+def _fit_into(img: Image.Image, box_w: int, box_h: int,
+              auto_rotate: bool = False) -> Image.Image:
+    """Вписать изображение в ячейку с сохранением пропорций (без обрезки).
+
+    auto_rotate — повернуть на 90°, если ориентация снимка не совпадает с
+    ориентацией ячейки (альбомный разворот в книжную ячейку и наоборот):
+    так изображение занимает ячейку целиком, а не полоску посередине.
+    """
     img = img.convert("RGB")
     w, h = img.size
+    if auto_rotate and ((w > h) != (box_w > box_h)):
+        img = img.rotate(90, expand=True)
+        w, h = img.size
     scale = min(box_w / w, box_h / h)
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return img.resize(new_size, Image.LANCZOS)
@@ -66,7 +75,8 @@ def compose_grid_page(image_paths: Sequence[str],
                       grid: Tuple[int, int] = (2, 2),
                       margin: int = 40,
                       gutter: int = 30,
-                      caption: str | None = None) -> Image.Image:
+                      caption: str | None = None,
+                      auto_rotate: bool = False) -> Image.Image:
     """Собрать один лист: до cols*rows изображений в сетке grid (cols, rows).
 
     Если задан caption — сверху рисуется подпись кириллическим шрифтом.
@@ -88,7 +98,7 @@ def compose_grid_page(image_paths: Sequence[str],
             src = Image.open(path)
         except (OSError, ValueError):
             continue
-        thumb = _fit_into(src, cell_w, cell_h)
+        thumb = _fit_into(src, cell_w, cell_h, auto_rotate=auto_rotate)
         r, c = divmod(idx, cols)
         cell_x = margin + c * (cell_w + gutter)
         cell_y = grid_top + r * (cell_h + gutter)
@@ -101,7 +111,7 @@ def compose_grid_page(image_paths: Sequence[str],
 
 def make_spreads_pdf(image_paths: Sequence[str], output_pdf: str,
                      per_sheet: int = 4, grid: Tuple[int, int] = (2, 2),
-                     landscape: bool = True, caption: str | None = None) -> str:
+                     landscape: bool = False, caption: str | None = None) -> str:
     """Сформировать PDF разворотов: по per_sheet изображений на лист (2x2).
 
     caption — подпись (например, «ФИО — Паспорт»), печатается сверху каждого
@@ -117,7 +127,7 @@ def make_spreads_pdf(image_paths: Sequence[str], output_pdf: str,
         chunk = image_paths[i: i + per_sheet]
         page_caption = f"{caption} — лист {idx}/{total}" if caption else None
         pages.append(compose_grid_page(chunk, page_px=page_px, grid=grid,
-                                       caption=page_caption))
+                                       caption=page_caption, auto_rotate=True))
 
     os.makedirs(os.path.dirname(os.path.abspath(output_pdf)), exist_ok=True)
     first, rest = pages[0], pages[1:]

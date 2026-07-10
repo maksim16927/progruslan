@@ -315,7 +315,7 @@ class RegulaScanner(BaseScanner):
         except Exception:  # noqa: BLE001
             return False
 
-    def _wait_for_result(self, reader, timeout_s: int, grace_s: float = 12.0,
+    def _wait_for_result(self, reader, timeout_s: int, grace_s: float = 6.0,
                          start_count: int = 0):
         """Ждать завершения обработки документа.
 
@@ -344,10 +344,10 @@ class RegulaScanner(BaseScanner):
                 if self._proc_count > last_event_count:
                     last_event_count = self._proc_count
                     last_event_at = time.monotonic()
-                # После последнего прохода ждём тишины ~3 c и забираем результат.
-                if last_event_at is not None and time.monotonic() - last_event_at >= 3.0:
+                # После последнего прохода ждём тишины ~1.5 c и забираем результат.
+                if last_event_at is not None and time.monotonic() - last_event_at >= 1.5:
                     return
-                time.sleep(0.2)
+                time.sleep(0.1)
             if last_event_at is not None or self._has_text(reader) or self._has_portrait(reader):
                 return
             diag = self.diagnostics(reader)

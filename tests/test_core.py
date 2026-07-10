@@ -17,7 +17,9 @@ class TestTransliteration(unittest.TestCase):
     def test_digraphs(self):
         self.assertEqual(tr.translit_lat_to_cyr("shashlik"), "шашлик")
         self.assertEqual(tr.translit_lat_to_cyr("zhuk"), "жук")
-        self.assertEqual(tr.translit_lat_to_cyr("chay"), "чаы")  # y неоднозначна
+        self.assertEqual(tr.translit_lat_to_cyr("chay"), "чай")  # y после гласной — «й»
+        self.assertEqual(tr.translit_lat_to_cyr("sergey"), "сергей")
+        self.assertEqual(tr.translit_lat_to_cyr("bystrov"), "быстров")  # y после согласной — «ы»
 
     def test_case_preserved(self):
         self.assertEqual(tr.translit_lat_to_cyr("IVAN"), "ИВАН")

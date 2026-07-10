@@ -222,6 +222,9 @@ class MainWindow(QWidget):
         read_btn = QPushButton("📷 Считать паспорт (Regula)")
         read_btn.setStyleSheet(S_BTN)
         read_btn.clicked.connect(self.on_read_passport)
+        consent_btn = QPushButton("📷📄 Считать паспорт + Согласие")
+        consent_btn.setStyleSheet(S_BTN)
+        consent_btn.clicked.connect(self.on_read_and_consent)
         mrz_btn = QPushButton("🔎 Распознать MRZ из текста")
         mrz_btn.setStyleSheet(S_BTN_ALT)
         mrz_btn.clicked.connect(self.on_parse_mrz)
@@ -229,6 +232,7 @@ class MainWindow(QWidget):
         translit_btn.setStyleSheet(S_BTN_ALT)
         translit_btn.clicked.connect(self.on_transliterate)
         row.addWidget(read_btn)
+        row.addWidget(consent_btn)
         row.addWidget(mrz_btn)
         row.addWidget(translit_btn)
         v.addLayout(row)
@@ -513,6 +517,40 @@ class MainWindow(QWidget):
                 "заполните поля вручную или вставьте MRZ в поле и нажмите «Распознать MRZ».")
         self._update_status()
 
+    def on_read_and_consent(self):
+        """Считать паспорт и сразу сформировать Согласие + открыть папку клиента.
+
+        Быстрый сценарий оператора (без выбора услуг): паспорт -> поля ->
+        согласие.docx (+PDF, если есть конвертер) -> папка клиента на экране.
+        """
+        self.on_read_passport()
+        if not self.passport_fields["FIO"].text().strip():
+            return  # паспорт не считался — сообщение уже показано
+        folder = self._ensure_client()
+        if not folder:
+            return
+        self._import_pending_scans(folder)
+        try:
+            created = documents.generate_documents(
+                self.cfg.templates_dir, self._fields(), ["Согласие"], folder)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Ошибка формирования", str(e))
+            return
+        for docx_path in created:
+            pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+            try:
+                winio.docx_to_pdf(docx_path, pdf_path)
+                self.last_pdf_path = pdf_path
+            except Exception:  # noqa: BLE001 — без конвертера остаётся .docx
+                pass
+        if not created:
+            QMessageBox.warning(
+                self, "Согласие",
+                "Шаблон согласия не найден. Положите файл "
+                f"«{documents.DOC_TEMPLATES['Согласие']['file']}» в папку шаблонов:\n"
+                f"{self.cfg.templates_dir}")
+        winio_open_folder(folder)
+
     # --- выбор готовых сканов с диска (без оборудования) ------------------
     _IMG_FILTER = "Изображения (*.jpg *.jpeg *.png *.tif *.tiff *.bmp);;Все файлы (*)"
 
@@ -740,11 +778,13 @@ class MainWindow(QWidget):
                     if f.lower().startswith("page_")] if os.path.isdir(dest) else []
         num = len(existing) + 1
         saved = 0
+        # Подтверждение только перед ПЕРВОЙ страницей; дальше вопрос
+        # «сканировать следующий?» сам служит стартом захвата.
+        QMessageBox.information(
+            self, "Сканирование страниц",
+            f"Положите разворот {num} на стекло сканера и нажмите ОК —\n"
+            "начнётся захват.")
         while True:
-            QMessageBox.information(
-                self, "Сканирование страниц",
-                f"Положите разворот {num} на стекло сканера и нажмите ОК —\n"
-                "начнётся захват.")
             tmp = tempfile.mkdtemp(prefix="arm_regula_page_")
             try:
                 cap = self.passport_scanner.capture_passport(tmp)
@@ -761,7 +801,8 @@ class MainWindow(QWidget):
                 num += 1
             more = QMessageBox.question(
                 self, "Сканирование страниц",
-                f"Сохранено страниц: {saved}.\nСканировать следующий разворот?",
+                f"Сохранено страниц: {saved}.\n"
+                f"Положите разворот {num} и нажмите «Да» — сканирование начнётся сразу.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes)
             if more != QMessageBox.StandardButton.Yes:
@@ -786,7 +827,7 @@ class MainWindow(QWidget):
         caption = f"{self.passport_fields['FIO'].text().strip()} — Паспорт"
         try:
             pdf_layout.make_spreads_pdf(images, out, per_sheet=4, grid=(2, 2),
-                                        landscape=True, caption=caption)
+                                        landscape=False, caption=caption)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Ошибка", str(e))
             return
@@ -843,12 +884,10 @@ class MainWindow(QWidget):
             QMessageBox.critical(self, "Ошибка печати", str(e))
 
     def on_open_folder(self):
-        fio = self.passport_fields["FIO"].text().strip()
-        folder = storage.find_client_folder(self.cfg.archive_root, fio) if fio else None
-        if folder and os.path.exists(folder):
+        """Открыть папку клиента; если её ещё нет — создать (по ФИО)."""
+        folder = self._ensure_client()
+        if folder:
             winio_open_folder(folder)
-        else:
-            QMessageBox.warning(self, "Не найдено", "Папка клиента не найдена.")
 
     def closeEvent(self, event):
         if self.guard:
