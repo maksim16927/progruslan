@@ -318,6 +318,13 @@ class RegulaScanner(BaseScanner):
         if signaled:
             self._watch_count = self._proc_count
             self._watch_last = time.monotonic()
+            # Если результат уже полный (текст + снимок) — забираем сразу.
+            if self._has_text(reader) and self._has_portrait(reader):
+                self._watch_last = None
+                cap = self._collect(reader, out_dir)
+                self._clear_results(reader)
+                self._watch_seen = False
+                return cap
             return None
         last = getattr(self, "_watch_last", None)
         if last is not None and time.monotonic() - last >= quiet_s:
@@ -400,10 +407,14 @@ class RegulaScanner(BaseScanner):
                 if self._proc_count > last_event_count:
                     last_event_count = self._proc_count
                     last_event_at = time.monotonic()
-                # После последнего прохода ждём тишины ~1.5 c и забираем результат.
+                    # Максимально быстро: если после этого прохода уже есть и
+                    # текст (MRZ/поля), и снимок — результат полный, не ждём.
+                    if self._has_text(reader) and self._has_portrait(reader):
+                        return
+                # Иначе после последнего прохода ждём тишины ~1.5 c.
                 if last_event_at is not None and time.monotonic() - last_event_at >= 1.5:
                     return
-                time.sleep(0.1)
+                time.sleep(0.05)
             if last_event_at is not None or self._has_text(reader) or self._has_portrait(reader):
                 return
             diag = self.diagnostics(reader)
