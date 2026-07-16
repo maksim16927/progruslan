@@ -239,8 +239,10 @@ class RegulaScanner(BaseScanner):
         какая команда сработала / какие пробовали — для диагностики.
         """
         tried = []
+        # ВАЖНО: только команды, запускающие ПОЛНУЮ обработку (скан + OCR).
+        # GetImages убран: он забирает лишь изображения без распознавания.
         for cmd in ("Process", "DoScan", "Scan", "StartScan", "Capture",
-                    "DoProcess", "ScanDocument", "GetImages"):
+                    "DoProcess", "ScanDocument"):
             fn = getattr(reader, cmd, None)
             if fn is None:
                 continue
@@ -348,7 +350,12 @@ class RegulaScanner(BaseScanner):
         info["mrz_preview"] = self._mrz(reader)[:60]
         info["surname_preview"] = self._text(reader, "SURNAME")
         info["capture_cmd"] = getattr(self, "_capture_cmd", "не вызывалась")
-        info["com_methods"] = ", ".join(self._com_methods(reader))[:600]
+        # Полный список методов, похожих на команды сканирования/распознавания.
+        keywords = ("scan", "process", "captur", "ocr", "mrz", "recogn", "read")
+        methods = self._com_methods(reader)
+        info["scan_methods"] = ", ".join(
+            m for m in methods if any(k in m.lower() for k in keywords))
+        info["lexical_xml_preview"] = self.lexical_xml(reader)[:300]
         return info
 
     def process_image(self, image_path: str, out_dir: str) -> PassportCapture:
