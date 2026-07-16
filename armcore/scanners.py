@@ -428,12 +428,16 @@ class RegulaScanner(BaseScanner):
 
         deadline = time.monotonic() + timeout_s
 
+        doc_seen = 0  # видел ли датчик документ хоть раз за время ожидания
+
         if self._events_ok:
             last_event_count = start_count
             last_event_at = None
             rec_at_start = self._flag(reader, "IsDocumentRecognized")
             while time.monotonic() < deadline:
                 pump()
+                if self._flag(reader, "IsDocumentReady") == 1:
+                    doc_seen = 1
                 if self._proc_count > last_event_count:
                     last_event_count = self._proc_count
                     last_event_at = time.monotonic()
@@ -452,6 +456,7 @@ class RegulaScanner(BaseScanner):
             if last_event_at is not None or self._has_text(reader) or self._has_portrait(reader):
                 return
             diag = self.diagnostics(reader)
+            diag["document_seen_during_wait"] = doc_seen
             raise ScannerError(
                 f"Regula: документ не обработан за {timeout_s} c. "
                 "Сканер запускается сам, когда паспорт КЛАДУТ на стекло: "
