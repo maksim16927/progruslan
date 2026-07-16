@@ -518,10 +518,18 @@ class MainWindow(QWidget):
             msg += self._image_source_note(cap)
             QMessageBox.information(self, "Готово", msg)
         else:
-            QMessageBox.information(
-                self, "Сканы получены",
-                f"Получено сканов: {len(cap.image_paths)}. MRZ не распознан — "
-                "заполните поля вручную или вставьте MRZ в поле и нажмите «Распознать MRZ».")
+            msg = (f"Получено сканов: {len(cap.image_paths)}. MRZ не распознан — "
+                   "заполните поля вручную или вставьте MRZ в поле и нажмите "
+                   "«Распознать MRZ».")
+            # Диагностика: доступен ли у SDK текстовый результат вообще.
+            # Text/OCRLexicalAnalyze = 0 при снятом снимке -> не активна
+            # лицензия распознавания (Regula Licensing, SDK DateLimit).
+            try:
+                diag = self.passport_scanner.diagnostics()
+                msg += f"\n\nДиагностика (пришлите разработчику):\n{diag}"
+            except Exception:  # noqa: BLE001
+                pass
+            QMessageBox.information(self, "Сканы получены", msg)
         self._update_status()
 
     def _image_source_note(self, cap) -> str:
