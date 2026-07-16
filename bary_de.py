@@ -515,6 +515,7 @@ class MainWindow(QWidget):
             msg = "Паспорт считан, поля заполнены."
             if not result.valid:
                 msg += "\n\nВнимание:\n" + "\n".join(result.warnings)
+            msg += self._image_source_note(cap)
             QMessageBox.information(self, "Готово", msg)
         else:
             QMessageBox.information(
@@ -522,6 +523,23 @@ class MainWindow(QWidget):
                 f"Получено сканов: {len(cap.image_paths)}. MRZ не распознан — "
                 "заполните поля вручную или вставьте MRZ в поле и нажмите «Распознать MRZ».")
         self._update_status()
+
+    def _image_source_note(self, cap) -> str:
+        """Предупреждение, если вместо полного кадра страницы получен портрет.
+
+        В этом случае добавляем диагностику размеров снимков SDK (images_info) —
+        по ней видно, какие методы вообще отдают кадры на этом экземпляре.
+        """
+        if getattr(cap, "image_source", "") not in ("portrait", "none"):
+            return ""
+        note = ("\n\nВнимание: полный кадр страницы не получен "
+                f"(источник: {cap.image_source}) — в 2×2 попадёт только фото.")
+        try:
+            info = self.passport_scanner.images_info()
+            note += "\nДиагностика снимков (пришлите разработчику):\n" + str(info)
+        except Exception:  # noqa: BLE001
+            pass
+        return note
 
     # --- автозахват паспорта (сканер сам считывает при поднесении) --------
     def _toggle_auto_capture(self, on: bool):
@@ -570,6 +588,8 @@ class MainWindow(QWidget):
             note = "паспорт считан автоматически"
             if not result.valid:
                 note += " (проверьте: " + "; ".join(result.warnings[:1]) + ")"
+            if getattr(cap, "image_source", "") == "portrait":
+                note += " — получен не полный кадр, а фото"
             self._update_status(note)
         else:
             self._update_status("скан получен, MRZ не распознан — проверьте поля")

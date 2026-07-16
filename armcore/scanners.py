@@ -36,6 +36,7 @@ class PassportCapture:
     image_paths: List[str] = field(default_factory=list)  # сканы (главная стр. и т.д.)
     mrz_text: str = ""                                    # сырой текст MRZ (2 строки)
     viz_fields: dict = field(default_factory=dict)        # данные визуальной зоны (OCR)
+    image_source: str = ""   # откуда снимок: full_page / portrait / none (диагностика)
 
 
 # --------------------------------------------------------------------------- #
@@ -547,8 +548,9 @@ class RegulaScanner(BaseScanner):
             val = self._text(reader, code)
             if val:
                 viz[key] = val
-        images = self._save_images(reader, out_dir)
-        return PassportCapture(image_paths=images, mrz_text=mrz_text, viz_fields=viz)
+        images, source = self._save_images(reader, out_dir)
+        return PassportCapture(image_paths=images, mrz_text=mrz_text,
+                               viz_fields=viz, image_source=source)
 
     def _text(self, reader, key: str) -> str:
         try:
@@ -845,20 +847,26 @@ class RegulaScanner(BaseScanner):
         except Exception:  # noqa: BLE001 — не вышло развернуть, отдаём как есть
             return raw
 
-    def _save_images(self, reader, out_dir: str) -> List[str]:
+    def _save_images(self, reader, out_dir: str):
         """Сохранить ПОЛНЫЙ скан паспорта (без вырезки лица).
 
         Берём доступный снимок страницы (белый кадр / графическое поле) и
         сохраняем как passport_scan.jpg — лицо отдельно не вырезаем.
+        Возвращает (список путей, источник снимка) — источник нужен для
+        диагностики случая «вместо страницы только фото».
         """
         os.makedirs(out_dir, exist_ok=True)
-        raw = self._raw_image_bytes(reader) or self._portrait_bytes(reader)
+        source = "full_page"
+        raw = self._raw_image_bytes(reader)
         if not raw:
-            return []
+            source = "portrait"
+            raw = self._portrait_bytes(reader)
+        if not raw:
+            return [], "none"
         path = os.path.join(out_dir, "passport_scan.jpg")
         with open(path, "wb") as fh:
             fh.write(raw)
-        return [path]
+        return [path], source
 
     def scan_pages(self, out_dir: str, max_pages: Optional[int] = None) -> List[str]:
         # Постраничный захват разворотов на Regula 7017 — отдельный сценарий SDK,
