@@ -208,6 +208,14 @@ class RegulaScanner(BaseScanner):
         "DocumentTypesCandidates": 0x08,
     }
 
+    @staticmethod
+    def _flag(reader, name: str) -> int:
+        """Прочитать булев флаг SDK (IsDocumentReady и т.п.), -1 если нет."""
+        try:
+            return int(bool(getattr(reader, name)))
+        except Exception:  # noqa: BLE001
+            return -1
+
     def _clear_results(self, reader):
         """Очистить предыдущий результат, чтобы не подтянулись старые фото/текст."""
         try:
@@ -215,15 +223,29 @@ class RegulaScanner(BaseScanner):
         except Exception:  # noqa: BLE001
             pass
 
-    # -------------------------------------------------------------- захват
-    def capture_passport(self, out_dir: str, timeout_s: int = 60) -> PassportCapture:
-        """Захват с устройства: ждём, пока оператор положит паспорт и SDK обработает."""
-        reader = self._load_sdk()
+    def _connect_and_arm(self, reader):
+        """Подключиться и включить автозахват.
+
+        У этой версии SDK НЕТ команды «сканировать» — захват стартует только
+        сам (AutoScan), когда паспорт кладут на стекло. Поэтому: Connect,
+        затем ЗАНОВО включить AutoScan (до Connect настройка игнорируется).
+        """
         try:
             if hasattr(reader, "Connect"):
                 reader.Connect()
         except Exception as e:  # noqa: BLE001
             raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
+        for prop, val in (("OptionsEnabled", True), ("AutoScan", True)):
+            try:
+                setattr(reader, prop, val)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # -------------------------------------------------------------- захват
+    def capture_passport(self, out_dir: str, timeout_s: int = 60) -> PassportCapture:
+        """Захват с устройства: ждём, пока оператор положит паспорт и SDK обработает."""
+        reader = self._load_sdk()
+        self._connect_and_arm(reader)
         self._clear_results(reader)  # сбросить прошлый результат — фото будет новым
         self._start_capture(reader)
         start_count = self._proc_count
@@ -283,11 +305,7 @@ class RegulaScanner(BaseScanner):
         когда документ обработан, она вернёт PassportCapture.
         """
         reader = self._load_sdk()
-        try:
-            if hasattr(reader, "Connect"):
-                reader.Connect()
-        except Exception as e:  # noqa: BLE001
-            raise ScannerError(f"Regula: не удалось подключиться к сканеру: {e}") from e
+        self._connect_and_arm(reader)
         self._clear_results(reader)
         self._watch_count = self._proc_count
         self._watch_last = None
@@ -350,6 +368,10 @@ class RegulaScanner(BaseScanner):
         info["mrz_preview"] = self._mrz(reader)[:60]
         info["surname_preview"] = self._text(reader, "SURNAME")
         info["capture_cmd"] = getattr(self, "_capture_cmd", "не вызывалась")
+        info["device_ready"] = self._flag(reader, "IsDeviceReady")
+        info["document_ready"] = self._flag(reader, "IsDocumentReady")
+        info["document_recognized"] = self._flag(reader, "IsDocumentRecognized")
+        info["autoscan"] = self._flag(reader, "AutoScan")
         # Полный список методов, похожих на команды сканирования/распознавания.
         keywords = ("scan", "process", "captur", "ocr", "mrz", "recogn", "read")
         methods = self._com_methods(reader)
@@ -409,6 +431,7 @@ class RegulaScanner(BaseScanner):
         if self._events_ok:
             last_event_count = start_count
             last_event_at = None
+            rec_at_start = self._flag(reader, "IsDocumentRecognized")
             while time.monotonic() < deadline:
                 pump()
                 if self._proc_count > last_event_count:
@@ -421,14 +444,19 @@ class RegulaScanner(BaseScanner):
                 # Иначе после последнего прохода ждём тишины ~1.5 c.
                 if last_event_at is not None and time.monotonic() - last_event_at >= 1.5:
                     return
+                # Дополнительный сигнал готовности от самого SDK (переход 0 -> 1).
+                if (last_event_at is None and rec_at_start != 1
+                        and self._flag(reader, "IsDocumentRecognized") == 1):
+                    return
                 time.sleep(0.05)
             if last_event_at is not None or self._has_text(reader) or self._has_portrait(reader):
                 return
             diag = self.diagnostics(reader)
             raise ScannerError(
                 f"Regula: документ не обработан за {timeout_s} c. "
-                "Положите паспорт на стекло разворотом вниз ДО нажатия кнопки и "
-                "проверьте, что сканер виден в фирменной программе Regula. "
+                "Сканер запускается сам, когда паспорт КЛАДУТ на стекло: "
+                "нажмите кнопку, затем положите паспорт разворотом вниз "
+                "(если уже лежал — приподнимите и положите снова). "
                 f"Диагностика: {diag}."
             )
 
@@ -451,9 +479,10 @@ class RegulaScanner(BaseScanner):
         diag = self.diagnostics(reader)
         raise ScannerError(
             "Regula: не дождались результата распознавания за "
-            f"{timeout_s} c. Положите паспорт на стекло разворотом вниз ДО "
-            "нажатия кнопки и проверьте, что сканер виден в фирменной программе "
-            f"Regula. Диагностика: {diag}. Пришлите эту строку разработчику."
+            f"{timeout_s} c. Сканер запускается сам, когда паспорт КЛАДУТ на "
+            "стекло: нажмите кнопку, затем положите паспорт (если уже лежал — "
+            "приподнимите и положите снова). "
+            f"Диагностика: {diag}. Пришлите эту строку разработчику."
         )
 
     # ------------------------------------------------------------- разбор
