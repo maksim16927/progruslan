@@ -380,11 +380,28 @@ class MainWindow(QWidget):
         bar.setStyleSheet("QFrame{background:#0D0F0E;} QLabel{color:#8FA89A; font-size:12px;}")
         h = QHBoxLayout(bar)
         h.setContentsMargins(20, 6, 20, 6)
+        # Индикатор сканера: зелёный — подключён, красный — нет, серый — mock.
+        self.scanner_led = QLabel()
+        self.scanner_led.setStyleSheet(
+            "font-size:14px; font-weight:700; padding-right:8px;")
+        h.addWidget(self.scanner_led)
         self.status_label = QLabel()
         h.addWidget(self.status_label)
         h.addStretch(1)
         self._update_status()
+        # Периодически перепроверять подключение сканера (каждые 15 c).
+        self.scanner_watch = QTimer(self)
+        self.scanner_watch.timeout.connect(self._poll_scanner_state)
+        self.scanner_watch.start(15_000)
+        QTimer.singleShot(800, self._poll_scanner_state)  # первая проверка сразу
         return bar
+
+    def _poll_scanner_state(self):
+        """Обновить индикатор сканера (не во время захвата — не мешаем COM)."""
+        if getattr(self, "_scanning", False):
+            return
+        self._refresh_scanner_state()
+        self._update_status()
 
     # ---------------------------------------------------------------- helpers
     def _fields(self) -> dict:
@@ -424,12 +441,20 @@ class MainWindow(QWidget):
             server_state = "офлайн (локальные блокировки)"
         if self.cfg.mock_scanners:
             scan_mode = "Сканеры: MOCK"
+            led_color, led_text = "#8FA89A", "● MOCK"
         elif self._scanner_ok is None:
             scan_mode = "Сканер: оборудование"
+            led_color, led_text = "#C8B900", "● Сканер: проверка…"
         elif self._scanner_ok:
             scan_mode = "Сканер: подключён ✓"
+            led_color, led_text = "#23C883", "● Сканер подключён"
         else:
             scan_mode = "Сканер: не найден ✗"
+            led_color, led_text = "#E5484D", "● Сканер не найден"
+        if hasattr(self, "scanner_led"):
+            self.scanner_led.setText(led_text)
+            self.scanner_led.setStyleSheet(
+                f"color:{led_color}; font-size:14px; font-weight:700; padding-right:8px;")
         lock = f" • блокировка: {self.guard_folder}" if self.guard_folder else ""
         self.status_label.setText(
             f"Оператор: {self.cfg.operator} • АРМ: {self.cfg.workstation} • "
