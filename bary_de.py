@@ -134,6 +134,10 @@ class MainWindow(QWidget):
         self.cfg = arm_config.load_config()
         self.passport_scanner = scanners.get_passport_scanner(self.cfg)
         self.doc_scanner = scanners.get_document_scanner(self.cfg)
+        # Во время ожидания сканера прокачивать события GUI — окно не замирает.
+        if hasattr(self.passport_scanner, "ui_pump"):
+            self.passport_scanner.ui_pump = QApplication.processEvents
+        self._scanning = False  # защита от повторного нажатия во время скана
         self.server = ServerClient(self.cfg.server_url, self.cfg.operator, self.cfg.workstation)
 
         # Текущая блокировка и временные сканы паспорта (до создания папки клиента).
@@ -494,7 +498,11 @@ class MainWindow(QWidget):
         if self.cfg.mock_scanners:
             self.on_pick_passport()
             return
+        if self._scanning:
+            return  # уже идёт захват — игнорируем повторное нажатие
         import tempfile
+        self._scanning = True
+        self._update_status("идёт считывание паспорта…")
         try:
             tmp = tempfile.mkdtemp(prefix="arm_passport_")
             cap = self.passport_scanner.capture_passport(tmp)
@@ -503,6 +511,8 @@ class MainWindow(QWidget):
             self._update_status()
             QMessageBox.critical(self, "Сканер недоступен", str(e))
             return
+        finally:
+            self._scanning = False
         self._scanner_ok = True
         self.pending_passport_scans = list(cap.image_paths)
         if cap.mrz_text:
@@ -576,6 +586,8 @@ class MainWindow(QWidget):
             self._update_status()
 
     def _auto_capture_tick(self):
+        if self._scanning:
+            return  # идёт захват по кнопке — не мешаем
         import tempfile
         try:
             tmp = tempfile.mkdtemp(prefix="arm_auto_")
@@ -860,19 +872,28 @@ class MainWindow(QWidget):
                                    f"Отсканировано страниц: {len(pages)}\nСохранены в:\n{dest}")
             return
 
-        import shutil
-        import tempfile
+        if self._scanning:
+            return
         # Нумерация продолжается после уже отсканированных страниц.
         existing = [f for f in os.listdir(dest)
                     if f.lower().startswith("page_")] if os.path.isdir(dest) else []
         num = len(existing) + 1
-        saved = 0
         # Подтверждение только перед ПЕРВОЙ страницей; дальше вопрос
         # «сканировать следующий?» сам служит стартом захвата.
         QMessageBox.information(
             self, "Сканирование страниц",
             f"Положите разворот {num} на стекло сканера и нажмите ОК —\n"
             "начнётся захват.")
+        self._scanning = True
+        try:
+            self._scan_pages_loop(dest, num)
+        finally:
+            self._scanning = False
+
+    def _scan_pages_loop(self, dest: str, num: int):
+        import shutil
+        import tempfile
+        saved = 0
         while True:
             tmp = tempfile.mkdtemp(prefix="arm_regula_page_")
             try:

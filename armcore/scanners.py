@@ -132,6 +132,7 @@ class RegulaScanner(BaseScanner):
         self._proc_count = 0       # сколько раз пришло OnProcessingFinished
         self._events_ok = False    # удалось ли привязать COM-события
         self._capture_cmd = "не вызывалась"  # какой командой запускали захват
+        self.ui_pump = None  # колбэк GUI (processEvents) — окно не «замерзает»
 
     # ------------------------------------------------------------------ SDK
     def _load_sdk(self):
@@ -425,6 +426,11 @@ class RegulaScanner(BaseScanner):
         def pump():
             if pythoncom is not None:
                 pythoncom.PumpWaitingMessages()
+            if self.ui_pump is not None:
+                try:
+                    self.ui_pump()  # дать GUI перерисоваться во время ожидания
+                except Exception:  # noqa: BLE001
+                    pass
 
         deadline = time.monotonic() + timeout_s
 
