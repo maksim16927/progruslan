@@ -511,6 +511,11 @@ class MainWindow(QWidget):
             self._update_status()
             QMessageBox.critical(self, "Сканер недоступен", str(e))
             return
+        except Exception as e:  # noqa: BLE001 — показать ЛЮБУЮ ошибку, не молчать
+            import traceback
+            QMessageBox.critical(self, "Ошибка при считывании",
+                                 f"{e}\n\n{traceback.format_exc()[-800:]}")
+            return
         finally:
             self._scanning = False
         self._scanner_ok = True
@@ -570,7 +575,7 @@ class MainWindow(QWidget):
         if on:
             try:
                 self.passport_scanner.watch_begin()
-            except scanners.ScannerError as e:
+            except Exception as e:  # noqa: BLE001 — показать любую ошибку
                 QMessageBox.critical(self, "Сканер недоступен", str(e))
                 self.auto_check.setChecked(False)
                 return
@@ -900,6 +905,11 @@ class MainWindow(QWidget):
                 cap = self.passport_scanner.capture_passport(tmp)
             except scanners.ScannerError as e:
                 QMessageBox.critical(self, "Ошибка сканирования", str(e))
+                break
+            except Exception as e:  # noqa: BLE001 — показать ЛЮБУЮ ошибку
+                import traceback
+                QMessageBox.critical(self, "Ошибка при считывании",
+                                     f"{e}\n\n{traceback.format_exc()[-800:]}")
                 break
             if not cap.image_paths:
                 QMessageBox.warning(self, "Нет изображения",
