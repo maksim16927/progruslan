@@ -451,9 +451,15 @@ class MainWindow(QWidget):
             return
         try:
             sc = self.passport_scanner
-            if isinstance(sc, scanners.RegulaScanner) and sc._reader is not None:
-                ready = sc._flag(sc._reader, "IsDeviceReady")
-                self._scanner_ok = True if ready != 0 else False
+            if isinstance(sc, scanners.RegulaScanner):
+                if sc._reader is None:
+                    # SDK ещё не загружался — НЕ инициализируем его из статуса
+                    # (загрузка тяжёлая и может подвесить окно). Проверится
+                    # при первом считывании.
+                    self._scanner_ok = None
+                else:
+                    ready = sc._flag(sc._reader, "IsDeviceReady")
+                    self._scanner_ok = True if ready != 0 else False
             else:
                 self._scanner_ok = bool(sc.is_available())
         except Exception:  # noqa: BLE001 — статус не должен ронять программу

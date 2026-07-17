@@ -99,7 +99,10 @@ class FolderGuard:
         self.cfg = cfg
         self.folder_id = folder_id              # стабильный идентификатор (имя папки)
         self.folder_path = folder_path
-        self._client = ServerClient(cfg.server_url, cfg.operator, cfg.workstation)
+        # Короткий таймаут: вызывается из GUI-потока, долгие ожидания сети
+        # замораживают окно программы.
+        self._client = ServerClient(cfg.server_url, cfg.operator, cfg.workstation,
+                                    timeout=1.0)
         self._local = _LocalLock(folder_path, cfg.operator, cfg.workstation)
         self._mode = None                        # "server" | "local"
         self.status: Optional[LockStatus] = None
