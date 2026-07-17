@@ -138,7 +138,10 @@ class MainWindow(QWidget):
         if hasattr(self.passport_scanner, "ui_pump"):
             self.passport_scanner.ui_pump = QApplication.processEvents
         self._scanning = False  # защита от повторного нажатия во время скана
-        self.server = ServerClient(self.cfg.server_url, self.cfg.operator, self.cfg.workstation)
+        # Короткий таймаут: сервер опрашивается из GUI-потока, длинное ожидание
+        # замораживает окно.
+        self.server = ServerClient(self.cfg.server_url, self.cfg.operator,
+                                   self.cfg.workstation, timeout=1.0)
 
         # Текущая блокировка и временные сканы паспорта (до создания папки клиента).
         self.guard: FolderGuard | None = None
@@ -422,23 +425,42 @@ class MainWindow(QWidget):
         if fio:
             self.passport_fields["FIO"].setText(fio)
 
+    def _server_state_cached(self) -> str:
+        """Статус сервера с кэшем 30 c — health() ходит по сети (таймаут 4 c)
+        и при каждом обновлении статуса замораживал окно, если сервер офлайн."""
+        import time
+        now = time.monotonic()
+        state, checked_at = getattr(self, "_server_cache", ("?", 0.0))
+        if now - checked_at >= 30.0:
+            try:
+                self.server.health()
+                state = "онлайн"
+            except ServerUnavailable:
+                state = "офлайн (локальные блокировки)"
+            self._server_cache = (state, now)
+        return state
+
     def _refresh_scanner_state(self):
-        """Пересчитать состояние сканера (в режиме оборудования). Безопасно."""
+        """Пересчитать состояние сканера (в режиме оборудования). Безопасно.
+
+        Дорогая инициализация SDK — только один раз; дальше лишь быстрый
+        флаг IsDeviceReady, чтобы не подвешивать интерфейс.
+        """
         if self.cfg.mock_scanners:
             self._scanner_ok = None
             return
         try:
-            self._scanner_ok = bool(self.passport_scanner.is_available())
+            sc = self.passport_scanner
+            if isinstance(sc, scanners.RegulaScanner) and sc._reader is not None:
+                ready = sc._flag(sc._reader, "IsDeviceReady")
+                self._scanner_ok = True if ready != 0 else False
+            else:
+                self._scanner_ok = bool(sc.is_available())
         except Exception:  # noqa: BLE001 — статус не должен ронять программу
             self._scanner_ok = False
 
     def _update_status(self, extra: str = ""):
-        server_state = "?"
-        try:
-            self.server.health()
-            server_state = "онлайн"
-        except ServerUnavailable:
-            server_state = "офлайн (локальные блокировки)"
+        server_state = self._server_state_cached()
         if self.cfg.mock_scanners:
             scan_mode = "Сканеры: MOCK"
             led_color, led_text = "#8FA89A", "● MOCK"
